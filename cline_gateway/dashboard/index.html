@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cline Gateway</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#151820; --card:#1a1e27; --elev:#222736;
+  --field:#10131a; --stripe:#161a22; --border:#262c3a;
+  --accent:#8b7cf7; --accent-deep:#7466e0; --accent-soft:#b3a7fb; --accent-dim:#2c2b45;
+  --fg:#e8eaf0; --muted:#9aa1b2; --faint:#666e80;
+  --ok:#3ddc84; --warn:#ffc857; --err:#ff6b7a;
+  --r:10px;
+}
+*{box-sizing:border-box; margin:0; padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--fg);
+  font:14px/1.5 "Segoe UI", system-ui, sans-serif;
+  display:flex; overflow:hidden;
+}
+.mono{font-family:"Cascadia Mono","Consolas",monospace; font-size:12px}
+a{color:var(--accent-soft); text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ---------- layout ---------- */
+#side{width:212px; flex:none; background:var(--panel); border-right:1px solid var(--border);
+  display:flex; flex-direction:column; padding:18px 12px;}
+#main{flex:1; display:flex; flex-direction:column; min-width:0}
+#view{flex:1; overflow-y:auto; padding:22px 26px 40px}
+
+/* ---------- brand ---------- */
+#brand{display:flex; align-items:center; gap:10px; padding:2px 6px 18px; border-bottom:1px solid var(--border); margin-bottom:14px}
+#brand .mark{width:5px; height:34px; background:var(--accent); border-radius:2px; flex:none}
+#brand b{font:600 16px "Segoe UI Semibold", "Segoe UI", sans-serif; display:block}
+#brand small{color:var(--faint); font-size:11px}
+#brand small:hover{text-decoration:underline; color:var(--accent-soft)}
+
+/* ---------- nav ---------- */
+.nav-btn{display:flex; align-items:center; gap:11px; width:100%; text-align:left;
+  background:none; border:0; color:var(--muted); padding:10px 12px; border-radius:8px;
+  font:14px "Segoe UI", sans-serif; cursor:pointer; margin-bottom:2px}
+.nav-btn:hover{background:var(--elev); color:var(--fg)}
+.nav-btn.on{background:var(--accent-dim); color:var(--fg)}
+.nav-btn .ico{width:17px; text-align:center; font-size:15px; flex:none; opacity:.9}
+.nav-btn.on .ico{color:var(--accent-soft)}
+#side .spacer{flex:1}
+#side .foot{padding:10px 12px 2px; border-top:1px solid var(--border); color:var(--faint); font-size:11px}
+
+/* ---------- top bar ---------- */
+#top{display:flex; align-items:center; gap:10px; padding:14px 22px; border-bottom:1px solid var(--border); background:var(--panel)}
+#top h1{font:600 15px "Segoe UI Semibold","Segoe UI",sans-serif; margin-right:auto}
+.chip{display:inline-flex; align-items:center; gap:7px; background:var(--card);
+  border:1px solid var(--border); border-radius:999px; padding:5px 12px; font-size:12px; color:var(--muted)}
+.dot{width:7px; height:7px; border-radius:50%; background:var(--muted); flex:none}
+.dot.ok{background:var(--ok); box-shadow:0 0 0 3px rgba(61,220,132,.15)}
+.dot.warn{background:var(--warn); box-shadow:0 0 0 3px rgba(255,200,87,.14)}
+.dot.err{background:var(--err); box-shadow:0 0 0 3px rgba(255,107,122,.14)}
+.dot.off{background:var(--faint)}
+
+/* ---------- buttons ---------- */
+.btn{border:0; border-radius:8px; cursor:pointer; font:600 13px "Segoe UI",sans-serif;
+  padding:9px 16px; transition:background .12s, border-color .12s, color .12s}
+.btn-pri{background:var(--accent); color:#0e0b22}
+.btn-pri:hover{background:var(--accent-deep)}
+.btn-pri:disabled{background:var(--elev); color:var(--faint); cursor:default}
+.btn-ghost{background:var(--card); color:var(--fg); border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--elev); border-color:var(--accent-dim)}
+.btn-quiet{background:transparent; color:var(--muted)}
+.btn-quiet:hover{background:var(--elev); color:var(--fg)}
+.btn-sm{padding:6px 11px; font-size:12px}
+.btn-danger:hover{border-color:var(--err); color:var(--err)}
+
+/* ---------- cards ---------- */
+.card{background:var(--card); border:1px solid var(--border); border-radius:var(--r);
+  padding:16px 18px; margin-bottom:16px}
+.card h2{font:600 13px "Segoe UI Semibold",sans-serif; margin-bottom:10px}
+.card h3{font:600 11px "Segoe UI Semibold",sans-serif; color:var(--faint);
+  text-transform:uppercase; letter-spacing:.07em; margin-bottom:8px}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+.kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px}
+.kpi{background:var(--card); border:1px solid var(--border); border-radius:var(--r); padding:13px 15px}
+.kpi .v{font:600 22px "Segoe UI Semibold",sans-serif}
+.kpi .k{color:var(--muted); font-size:12px; margin-top:2px}
+
+/* ---------- tables ---------- */
+table{width:100%; border-collapse:collapse; font-size:13px}
+th{color:var(--faint); font:600 10px "Segoe UI Semibold",sans-serif; text-transform:uppercase;
+  letter-spacing:.06em; text-align:left; padding:8px 10px; border-bottom:1px solid var(--border);
+  cursor:default; position:sticky; top:0; background:var(--card); z-index:1}
+th.sortable{cursor:pointer} th.sortable:hover{color:var(--fg)}
+td{padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:middle}
+tbody tr{transition:background .1s}
+tbody tr:hover{background:var(--elev)}
+tbody tr:nth-child(even){background:var(--stripe)}
+tbody tr:nth-child(even):hover{background:var(--elev)}
+tbody tr.sel{background:var(--accent-dim) !important}
+.tbl-wrap{border:1px solid var(--border); border-radius:var(--r); overflow:auto; background:var(--card)}
+
+/* ---------- states ---------- */
+.badge{display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:600}
+.b-ready,.b-available{background:rgba(61,220,132,.13); color:var(--ok)}
+.b-cooling,.b-partial{background:rgba(255,200,87,.13); color:var(--warn)}
+.b-dead,.b-exhausted,.b-blocked,.b-capped,.b-no_entitlement{background:rgba(255,107,122,.13); color:var(--err)}
+.b-paid_exhausted,.b-unavailable{background:rgba(179,167,251,.13); color:var(--accent-soft)}
+.b-usage,.b-free,.b-plan{background:rgba(154,161,178,.12); color:var(--muted)}
+
+/* ---------- forms ---------- */
+input[type=text],input[type=number],select{
+  background:var(--field); color:var(--fg); border:1px solid var(--border);
+  border-radius:8px; padding:8px 11px; font:13px "Segoe UI",sans-serif; outline:none; width:100%}
+input:focus,select:focus{border-color:var(--accent)}
+.field{margin-bottom:13px}
+.field label{display:block; color:var(--muted); font-size:12px; margin-bottom:5px}
+.field .help{color:var(--faint); font-size:11px; margin-top:4px}
+fieldset{border:1px solid var(--border); border-radius:var(--r); padding:14px 16px; margin-bottom:16px; background:var(--card)}
+legend{padding:0 8px; color:var(--faint); font:600 11px "Segoe UI Semibold",sans-serif;
+  text-transform:uppercase; letter-spacing:.07em}
+.kv{display:grid; grid-template-columns:auto 1fr; gap:6px 18px; font-size:13px}
+.kv dt{color:var(--muted)} .kv dd{color:var(--fg)}
+.copyable{cursor:pointer} .copyable:hover{color:var(--accent-soft)}
+
+/* ---------- misc ---------- */
+.toolbar{display:flex; align-items:center; gap:10px; margin-bottom:14px}
+.toolbar .grow{flex:1}
+.empty{padding:44px 20px; text-align:center; color:var(--muted)}
+.empty h3{font:600 16px "Segoe UI Semibold",sans-serif; color:var(--fg);
+  text-transform:none; letter-spacing:0; margin-bottom:8px}
+.steps{display:flex; gap:26px; margin:14px 0 20px; flex-wrap:wrap}
+.steps div{display:flex; gap:9px; align-items:baseline}
+.steps b{color:var(--accent); font-size:19px}
+#toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%);
+  background:var(--card); border:1px solid var(--border); border-radius:999px;
+  padding:9px 18px; font-size:13px; display:none; z-index:50; max-width:80%;
+  box-shadow:0 8px 30px rgba(0,0,0,.45)}
+#toast.ok{border-color:var(--ok); color:var(--ok)}
+#toast.err{border-color:var(--err); color:var(--err)}
+#toast.warn{border-color:var(--warn); color:var(--warn)}
+#login{max-width:360px; margin:12vh auto; text-align:center}
+#login .card{text-align:left}
+.mono-list{font-family:"Cascadia Mono",monospace; font-size:12px; white-space:pre-wrap; word-break:break-all}
+canvas.chart{width:100%; height:190px}
+.scroll{max-height:340px; overflow-y:auto}
+details{margin-bottom:8px}
+summary{cursor:pointer; color:var(--muted); font-size:13px; padding:6px 0}
+summary:hover{color:var(--fg)}
+.model-acc{padding:8px 12px; border-left:2px solid var(--border); margin:2px 0 10px 8px; font-size:12px; color:var(--muted)}
+
+/* ---------- compact models table ---------- */
+.tbl-compact td{padding:5px 10px; font-size:12.5px}
+.tbl-compact details{margin:0}
+.tbl-compact summary{padding:0; list-style:none; display:flex; align-items:center; gap:8px}
+.tbl-compact summary::-webkit-details-marker{display:none}
+.tbl-compact summary .caret{color:var(--faint); font-size:10px; transition:transform .12s; flex:none}
+.tbl-compact details[open] summary .caret{transform:rotate(90deg)}
+.tbl-compact .model-acc{margin:6px 0 4px 4px; padding:4px 10px}
+th .arr{font-size:9px; margin-left:3px; color:var(--accent-soft)}
+
+/* ---------- dense settings ---------- */
+.dense-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+.dense fieldset{margin-bottom:0}
+.dense .field{display:grid; grid-template-columns:150px 1fr; gap:2px 12px;
+  align-items:center; margin-bottom:7px}
+.dense .field label{margin-bottom:0; font-size:12px}
+.dense .field .help{grid-column:2; margin-top:1px}
+.dense input[type=text],.dense input[type=number],.dense select{padding:6px 9px; font-size:12.5px}
+
+/* ---------- guide ---------- */
+.guide h2{margin-top:0}
+.guide ol{margin:8px 0 10px 20px; color:var(--muted)}
+.guide ol li{margin-bottom:6px}
+.guide .note{color:var(--faint); font-size:12px; margin-top:8px}
+.guide kbd{background:var(--elev); border:1px solid var(--border); border-radius:5px;
+  padding:1px 7px; font:12px "Cascadia Mono",monospace}
+::-webkit-scrollbar{width:10px; height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--elev); border-radius:6px; border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:var(--border)}
+</style>
+</head>
+<body>
+
+<!-- login (only when admin key is needed and not yet entered) -->
+<div id="login" style="display:none">
+  <div class="card">
+    <h2>Cline Gateway</h2>
+    <p style="color:var(--muted); font-size:13px; margin-bottom:14px">
+      Enter the admin key to manage this gateway.</p>
+    <div class="field">
+      <label>Admin key</label>
+      <input type="text" id="login-key" autocomplete="off" spellcheck="false">
+    </div>
+    <button class="btn btn-pri" style="width:100%" onclick="App.login()">Continue</button>
+  </div>
+</div>
+
+<aside id="side" style="display:none">
+  <div id="brand">
+    <span class="mark"></span>
+    <div><b>Cline Gateway</b>
+      <a href="https://t.me/B3hnamR" target="_blank" rel="noopener"><small>@B3hnamR · t.me/B3hnamR</small></a>
+    </div>
+  </div>
+  <button class="nav-btn" data-tab="accounts" onclick="App.tab('accounts')"><span class="ico">◉</span>Accounts</button>
+  <button class="nav-btn" data-tab="models" onclick="App.tab('models')"><span class="ico">◇</span>Models</button>
+  <button class="nav-btn" data-tab="server" onclick="App.tab('server')"><span class="ico">▣</span>Server</button>
+  <button class="nav-btn" data-tab="settings" onclick="App.tab('settings')"><span class="ico">⚙</span>Settings</button>
+  <button class="nav-btn" data-tab="stats" onclick="App.tab('stats')"><span class="ico">∑</span>Stats</button>
+  <button class="nav-btn" data-tab="logs" onclick="App.tab('logs')"><span class="ico">≡</span>Logs</button>
+  <button class="nav-btn" data-tab="guide" onclick="App.tab('guide')"><span class="ico">?</span>Guide</button>
+  <div class="spacer"></div>
+  <div class="foot" id="foot-ver"></div>
+</aside>
+
+<div id="main" style="display:none">
+  <div id="top">
+    <h1 id="tab-title">Accounts</h1>
+    <span class="chip"><span class="dot off" id="dot-server"></span><span id="chip-server">gateway</span></span>
+    <span class="chip"><span class="dot off" id="dot-cline"></span><span id="chip-cline">Cline: …</span></span>
+    <span class="chip" id="chip-ready"></span>
+    <button class="btn btn-quiet btn-sm" id="btn-update" title="updates"
+      style="display:none; position:relative" onclick="App.showUpdate()">🔔
+      <span id="update-dot" style="position:absolute; top:2px; right:2px; width:8px; height:8px;
+        border-radius:50%; background:var(--accent); box-shadow:0 0 6px var(--accent)"></span>
+    </button>
+    <button class="btn btn-quiet btn-sm" id="btn-toggle" onclick="App.toggleServer()">…</button>
+  </div>
+  <div id="view"></div>
+</div>
+
+<div id="toast"></div>
+
+<!-- update available card -->
+<div id="update-card" style="display:none; position:fixed; top:64px; right:22px; z-index:60;
+  width:360px; background:var(--card); border:1px solid var(--accent-dim); border-radius:12px;
+  padding:16px 18px; box-shadow:0 12px 40px rgba(0,0,0,.5)">
+  <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px">
+    <b style="font-size:14px">Update available</b>
+    <span class="mono" id="upd-versions" style="color:var(--accent-soft)"></span>
+    <div class="grow" style="flex:1"></div>
+    <button class="btn btn-quiet btn-sm" onclick="App.hideUpdate()">✕</button>
+  </div>
+  <div id="upd-notes" class="mono-list" style="max-height:160px; overflow-y:auto;
+    color:var(--muted); margin-bottom:12px"></div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap">
+    <button class="btn btn-pri btn-sm" id="upd-go" onclick="App.doUpdate()">Update now</button>
+    <a class="btn btn-ghost btn-sm" id="upd-link" href="#" target="_blank" rel="noopener"
+      style="text-decoration:none; display:inline-flex; align-items:center">Release notes</a>
+    <button class="btn btn-quiet btn-sm" onclick="App.skipUpdate()">Skip this version</button>
+  </div>
+  <div id="upd-progress" style="color:var(--faint); font-size:12px; margin-top:8px"></div>
+</div>
+
+<script>
+"use strict";
+const App = (() => {
+  /* ------------ state ------------ */
+  let key = sessionStorage.getItem("gw-admin-key") || "";
+  let curTab = "accounts";
+  let timer = null;
+  let serverUp = true;
+  const cache = {};
+
+  /* ------------ http ------------ */
+  async function api(path, opts = {}) {
+    opts.headers = Object.assign({"Authorization": "Bearer " + key,
+      "Content-Type": "application/json"}, opts.headers || {});
+    if (opts.body && typeof opts.body !== "string")
+      opts.body = JSON.stringify(opts.body);
+    let r;
+    try { r = await fetch(path, opts); }
+    catch (e) { serverUp = false; paintChips(); throw new Error("gateway unreachable"); }
+    serverUp = true;
+    if (r.status === 401 || r.status === 403) { showLogin(); throw new Error("bad admin key"); }
+    if (!r.ok) {
+      let detail = r.statusText;
+      try { detail = (await r.json()).detail || detail; } catch (_) {}
+      throw new Error(detail);
+    }
+    return r.json();
+  }
+
+  /* ------------ ui helpers ------------ */
+  function toast(msg, kind = "") {
+    const t = document.getElementById("toast");
+    t.textContent = msg; t.className = kind; t.style.display = "block";
+    clearTimeout(t._t); t._t = setTimeout(() => t.style.display = "none", 4500);
+  }
+  const $ = sel => document.querySelector(sel);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const fmtUsd = micro => (micro === null || micro === undefined) ? "—"
+    : "$" + (micro / 1e6).toFixed(2);
+  const fmtSecs = s => { if (s === null || s === undefined) return "—";
+    if (s < 60) return s + "s"; const h = Math.floor(s/3600), m = Math.round(s%3600/60);
+    return h ? `${h}h ${m}m` : `${m}m`; };
+  const fmtLeft = ms => { const d = ms - Date.now(); if (d <= 0) return "expired";
+    const m = Math.floor(d/60000), h = Math.floor(m/60);
+    return h ? `${h}h ${m%60}m` : `${m} min`; };
+  function badge(state){ return `<span class="badge b-${esc(state)}">${esc(state)}</span>`; }
+  function copy(text){ navigator.clipboard.writeText(text).then(
+    () => toast("copied", "ok"), () => toast("copy failed", "err")); }
+
+  /* ------------ login ------------ */
+  function showLogin(){
+    $("#login").style.display = "block";
+    $("#side").style.display = "none";
+    $("#main").style.display = "none";
+  }
+  function hideLogin(){
+    $("#login").style.display = "none";
+    $("#side").style.display = "flex";
+    $("#main").style.display = "flex";
+  }
+  async function login(){
+    key = $("#login-key").value.trim();
+    try { await api("/admin/dash/server"); }
+    catch (e) { toast(e.message, "err"); return; }
+    sessionStorage.setItem("gw-admin-key", key);
+    hideLogin(); boot();
+  }
+
+  /* ------------ updates ------------ */
+  let updStatus = null;
+  async function pollUpdate(){
+    try {
+      updStatus = await api("/admin/dash/update/status");
+    } catch (e) { return; }
+    const skipped = localStorage.getItem("gw-skip-version") || "";
+    const show = updStatus && updStatus.update_available
+      && updStatus.latest !== skipped;
+    $("#btn-update").style.display = show ? "" : "none";
+  }
+  function showUpdate(){
+    if (!updStatus || !updStatus.update_available) return;
+    $("#upd-versions").textContent =
+      `${updStatus.current || "?"} → ${updStatus.latest || "?"}`;
+    $("#upd-notes").textContent = updStatus.notes || "";
+    $("#upd-link").href = updStatus.release_url || "#";
+    $("#upd-progress").textContent = "";
+    $("#upd-go").disabled = false;
+    $("#update-card").style.display = "block";
+  }
+  function hideUpdate(){ $("#update-card").style.display = "none"; }
+  function skipUpdate(){
+    if (updStatus && updStatus.latest)
+      localStorage.setItem("gw-skip-version", updStatus.latest);
+    hideUpdate(); pollUpdate();
+  }
+  async function doUpdate(){
+    const btn = $("#upd-go");
+    btn.disabled = true;
+    try {
+      $("#upd-progress").textContent = "downloading…";
+      await api("/admin/dash/update/download", {method:"POST"});
+      $("#upd-progress").textContent = "downloaded — restarting to apply…";
+      await api("/admin/dash/update/apply", {method:"POST"});
+      $("#upd-progress").textContent =
+        "updating — the tool relaunches itself in a few seconds.";
+    } catch (e) {
+      $("#upd-progress").textContent = "update failed: " + e.message;
+      btn.disabled = false;
+    }
+  }
+
+  /* ------------ chips / top bar ------------ */
+  async function paintChips(){
+    $("#dot-server").className = "dot " + (serverUp ? "ok" : "err");
+    $("#chip-server").textContent = serverUp ? "gateway: up" : "gateway: unreachable";
+    $("#btn-toggle").textContent = serverUp ? "Stop" : "…";
+    if (!serverUp) return;
+    try {
+      const cs = await api("/admin/dash/cline-status");
+      const kinds = {running:"ok", logged_in:"ok", installed:"warn", off:"off"};
+      $("#dot-cline").className = "dot " + (kinds[cs.chip_kind] || "off");
+      $("#chip-cline").textContent = cs.detail;
+    } catch (e) { /* chip stays */ }
+    try {
+      const pool = await api("/admin/pool/state");
+      const total = Object.values(pool.by_state || {}).reduce((a, b) => a + b, 0);
+      $("#chip-ready").textContent = `${pool.ready}/${total} accounts ready`;
+    } catch (e) { $("#chip-ready").textContent = ""; }
+    pollUpdate();
+  }
+
+  async function toggleServer(){
+    if (!serverUp) { toast("gateway is not running", "warn"); return; }
+    if (!confirm("Stop the gateway and quit the tool?\n\n" +
+                 "The process exits and frees the port. Relaunch ClineGateway.exe to start it again.")) return;
+    try { await api("/admin/dash/shutdown", {method: "POST"}); } catch (_) {}
+    serverUp = false; paintChips();
+    $("#btn-toggle").textContent = "Stopped";
+    toast("gateway stopped — you can close this window", "ok");
+  }
+
+  /* ------------ tab: accounts ------------ */
+  async function renderAccounts(v){
+    const [accs, pool] = await Promise.all([
+      api("/admin/accounts"), api("/admin/pool/state")]);
+    const rows = accs.accounts;
+    let html = `<div class="toolbar">
+      <button class="btn btn-pri" onclick="App.doImport()">⤓ Import from Cline</button>
+      <button class="btn btn-ghost" onclick="App.doReload()">Reload pool</button>
+      <button class="btn btn-quiet" onclick="App.refresh()">Refresh</button>
+      <div class="grow"></div>
+      <input type="text" id="acct-q" placeholder="Filter…" style="max-width:230px"
+             oninput="App.renderAccounts()">
+    </div>`;
+    if (!rows.length) {
+      html += `<div class="card"><div class="empty">
+        <h3>No accounts yet</h3>
+        <p>Get started in three steps — your account joins the pool immediately.</p>
+        <div class="steps" style="justify-content:center">
+          <div><b>1</b><span>Install the official Cline app</span></div>
+          <div><b>2</b><span>Sign in inside Cline</span></div>
+          <div><b>3</b><span>Click Import — done</span></div>
+        </div>
+        <button class="btn btn-pri" onclick="App.doImport()">Import from Cline</button>
+        <button class="btn btn-ghost" onclick="App.tab('guide')">Setup guide</button>
+      </div></div>`;
+    } else {
+      const q = (document.getElementById("acct-q")?.value || "").toLowerCase();
+      const shown = rows.filter(a =>
+        !q || (a.email + a.id + a.state + (a.source||"")).toLowerCase().includes(q));
+      html += `<div class="tbl-wrap"><table><thead><tr>
+        <th>Email</th><th>State</th><th>Paid lane</th><th>Token expires</th>
+        <th>Balance</th><th>Runs</th><th>Capped models</th><th></th></tr></thead><tbody>`;
+      for (const a of shown) {
+        const caps = (a.capped_models||[]).map(m => m.split("/").pop()).join(", ") || "—";
+        html += `<tr>
+          <td><b>${esc(a.email || a.id)}</b><br><span class="mono" style="color:var(--faint)">${esc(a.id)}</span></td>
+          <td>${badge(a.state)}</td>
+          <td>${a.paid_exhausted ? badge("paid_exhausted") : badge("available")}</td>
+          <td>${fmtLeft(a.expires_at || 0)}</td>
+          <td class="mono">${fmtUsd(a.balance_micro)}</td>
+          <td>${a.in_flight}</td>
+          <td style="color:var(--muted); font-size:12px">${esc(caps)}</td>
+          <td style="white-space:nowrap; text-align:right">
+            <button class="btn btn-quiet btn-sm" title="refresh token"
+              onclick="App.acct('refresh','${esc(a.id)}')">↻</button>
+            <button class="btn btn-quiet btn-sm" title="check balance"
+              onclick="App.acct('balance','${esc(a.id)}')">$</button>
+            <button class="btn btn-quiet btn-sm" title="enable"
+              onclick="App.acct('enable','${esc(a.id)}')">▶</button>
+            <button class="btn btn-quiet btn-sm btn-danger" title="remove"
+              onclick="App.acctRemove('${esc(a.id)}')">✕</button>
+          </td></tr>`;
+      }
+      html += `</tbody></table></div>
+        <p style="color:var(--faint); font-size:12px; margin-top:10px">
+          Paid lane = ability to spend Cline Credits. Exhausted accounts keep serving
+          all cline-free models. ~ = import-time balance, not yet re-polled.</p>`;
+    }
+    v.innerHTML = html;
+    const q = document.getElementById("acct-q");
+    if (q && cache.acctQ) { q.value = cache.acctQ; }
+  }
+
+  async function doImport(){
+    try {
+      const r = await api("/admin/dash/import", {method:"POST"});
+      toast(`imported ${r.written ?? 0} account(s) — Reload pool to activate`, "ok");
+    } catch (e) { toast("import: " + e.message, "err"); }
+  }
+  async function doReload(){
+    try {
+      const r = await api("/admin/pool/reload", {method:"POST"});
+      toast(`pool reloaded (${r.loaded} account(s), ${r.added} new)`, "ok");
+      renderAccounts($("#view")); paintChips();
+    } catch (e) { toast("reload: " + e.message, "err"); }
+  }
+  async function acct(action, id){
+    try {
+      if (action === "balance") {
+        const r = await api(`/admin/accounts/${encodeURIComponent(id)}/balance`, {method:"POST"});
+        toast(`balance: ${fmtUsd(r.balance_micro)}`, "ok");
+      } else {
+        await api(`/admin/accounts/${encodeURIComponent(id)}/${action}`, {method:"POST"});
+        toast(`${action}: ${id.split("-")[0]}…`, "ok");
+      }
+      renderAccounts($("#view"));
+    } catch (e) { toast(e.message, "err"); }
+  }
+  async function acctRemove(id){
+    if (!confirm(`Remove ${id} from the pool?`)) return;
+    try { await api(`/admin/accounts/${encodeURIComponent(id)}`, {method:"DELETE"});
+      toast("removed", "ok"); renderAccounts($("#view")); paintChips(); }
+    catch (e) { toast(e.message, "err"); }
+  }
+
+  /* ------------ tab: models ------------ */
+  const STATUS_RANK = {available:0, cooling:1, partial:1, capped:2,
+                       no_entitlement:3, no_credit:4, unavailable:5};
+  function sortModels(key){
+    const cur = cache.mdlSort || {key:"rank", dir:1};
+    cache.mdlSort = {key, dir: (cur.key === key ? -cur.dir : 1)};
+    renderModels($("#view"));
+  }
+  async function renderModels(v){
+    const data = await api("/admin/models/availability");
+    const q = (document.getElementById("mdl-q")?.value || "").toLowerCase();
+    const sort = cache.mdlSort || {key:"rank", dir:1};
+    cache.mdlSort = sort;
+    let models = data.models.filter(m =>
+      !q || m.model.toLowerCase().includes(q));
+    const keyFns = {
+      rank:  m => [STATUS_RANK[m.overall] ?? 9, m.model],
+      model: m => m.model,
+      lane:  m => [m.lane, m.model],
+      ratio: m => [(m.total_accounts ? m.available_on/m.total_accounts : 0), m.model],
+      next:  m => [m.next_release_in_s ?? 1e15, m.model],
+    };
+    const fn = keyFns[sort.key] || keyFns.rank;
+    models.sort((a, b) => {
+      const ka = fn(a), kb = fn(b);
+      const cmp = JSON.stringify(ka) < JSON.stringify(kb) ? -1
+                : JSON.stringify(ka) > JSON.stringify(kb) ? 1 : 0;
+      return cmp * sort.dir;
+    });
+    const th = (label, key) => {
+      const on = sort.key === key;
+      const arr = on ? (sort.dir === 1 ? "▲" : "▼") : "";
+      return `<th class="sortable" onclick="App.sortModels('${key}')">${label}<span class="arr">${arr}</span></th>`;
+    };
+    let html = `<div class="toolbar">
+      <h3 style="margin:0">${data.summary.fully_available}/${data.summary.total_models} fully available</h3>
+      <div class="grow"></div>
+      <input type="text" id="mdl-q" placeholder="Filter models…" style="max-width:230px"
+             oninput="App.renderModels()"></div>`;
+    html += `<div class="tbl-wrap"><table class="tbl-compact"><thead><tr>
+      ${th("Model","model")}${th("Lane","lane")}${th("On accounts","ratio")}
+      ${th("Status","rank")}${th("Next free","next")}</tr></thead><tbody>`;
+    for (const m of models) {
+      html += `<tr>
+        <td><details><summary><span class="caret">▶</span>
+            <b class="mono" style="font-size:12px">${esc(m.model)}</b></summary>
+          <div class="model-acc">${
+            m.accounts.map(a => `<div>${esc(a.email || a.account_id)} —
+              ${badge(a.status)} <span style="color:var(--faint)">${esc(a.reason || "")}
+              ${a.release_in_s ? " · frees in " + fmtSecs(a.release_in_s) : ""}</span></div>`
+            ).join("") || "<div>no accounts</div>"}</div></details></td>
+        <td>${badge(m.lane)}</td>
+        <td>${m.available_on}/${m.total_accounts}</td>
+        <td>${badge(m.overall)}</td>
+        <td class="mono">${m.next_release_in_s != null ? fmtSecs(m.next_release_in_s) : "—"}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>
+      <p style="color:var(--faint); font-size:12px; margin-top:10px">
+        Click a model for its per-account breakdown. Free models are capped per
+        model per account; paid models need balance &gt; 0; plan models need a
+        subscription. Sorted by availability — click a column to re-sort.</p>`;
+    v.innerHTML = html;
+    if (cache.mdlQ) { const e = document.getElementById("mdl-q"); if (e) e.value = cache.mdlQ; }
+  }
+
+  /* ------------ tab: server ------------ */
+  async function renderServer(v){
+    const s = await api("/admin/dash/server");
+    const row = (k, val, copyable) => `<dt>${k}</dt>
+      <dd class="mono ${copyable ? "copyable" : ""}" ${copyable ? `onclick="App.copy('${esc(val)}')" title="click to copy"` : ""}>${esc(val)}</dd>`;
+    v.innerHTML = `
+    <div class="grid2">
+      <fieldset><legend>Local endpoints</legend><dl class="kv">
+        ${row("OpenAI compatible", `http://${s.host}:${s.port}/v1/chat/completions`, true)}
+        ${row("Anthropic compatible", `http://${s.host}:${s.port}/v1/messages`, true)}
+        ${row("Models list", `http://${s.host}:${s.port}/v1/models`, true)}
+      </dl></fieldset>
+      <fieldset><legend>Keys</legend><dl class="kv">
+        ${row("Admin key", s.admin_key, true)}
+        ${(s.client_keys||[]).map(k => row(`Client key (${esc(k.name)})`, k.key, true)).join("")}
+      </dl>
+      <p style="color:var(--faint); font-size:11px; margin-top:8px">
+        Click a value to copy. Keys are required on /v1/* and /admin/*.</p></fieldset>
+      <fieldset><legend>Process</legend><dl class="kv">
+        ${row("Version", s.version)}
+        ${row("Config", s.config_path)}
+        ${row("Accounts dir", s.accounts_dir)}
+        ${row("Accounts source", s.accounts_source)}
+        ${row("Strategy", s.strategy)}
+      </dl></fieldset>
+      <fieldset><legend>Point a client at it</legend>
+        <p class="mono-list">base_url: http://${s.host}:${s.port}/v1
+api_key: ${esc(s.admin_key)}   # or any client key</p>
+        <p style="color:var(--faint); font-size:12px; margin-top:10px">
+          Works with the OpenAI SDK, Anthropic SDK, Kilo, Cline (openai-compatible
+          provider), or plain curl.</p></fieldset>
+    </div>`;
+  }
+
+  /* ------------ tab: settings ------------ */
+  async function renderSettings(v){
+    const s = await api("/admin/dash/settings");
+    const values = s.values;
+    const inp = (path, kind) => {
+      const val = values[path];
+      if (kind === "bool") {
+        return `<select data-set="${path}"><option value="true" ${val ? "selected":""}>true</option>
+          <option value="false" ${!val ? "selected":""}>false</option></select>`;
+      }
+      const t = (kind === "int" || kind === "float") ? "number" : "text";
+      return `<input type="${t}" data-set="${path}" value="${esc(val ?? "")}"
+        ${kind==="float" ? 'step="any"' : ""}>`;
+    };
+    const grp = (title, rows) => `<fieldset><legend>${title}</legend>
+      ${rows.map(([path, kind, label, help]) => `
+        <div class="field"><label>${label}</label>${inp(path, kind)}
+        ${help ? `<div class="help">${help}</div>` : ""}</div>`).join("")}</fieldset>`;
+    v.innerHTML = `<form onsubmit="return false" class="dense">
+    <div class="dense-grid">
+    ${grp("Server", [
+      ["server.host","text","Host","loopback only is safest"],
+      ["server.port","int","Port","a restart is required"]])}
+    ${grp("Accounts", [
+      ["accounts.source","text","Source","accounts_dir · providers_json · pool_file"],
+      ["accounts.dir","text","Accounts folder","snapshot .txt files live here"],
+      ["accounts.pool_file","text","Pool file","for pool_file source"]])}
+    ${grp("Pool", [
+      ["pool.strategy","text","Strategy","least_in_flight · round_robin · least_recently_used · quota_aware"],
+      ["pool.min_balance_micro","int","Min balance (µ$)","quota_aware: retire at/below this"],
+      ["pool.refresh_lead_seconds","int","Refresh lead (s)","refresh tokens this long before expiry"],
+      ["pool.cooldown_seconds","int","Cooldown (s)","429/5xx cooldown"],
+      ["pool.max_in_flight_per_account","int","Max in-flight/acct","concurrent runs per account"],
+      ["pool.acquire_wait_seconds","float","Acquire wait (s)","how long to wait for a free slot"],
+      ["pool.balance_poll_seconds","int","Balance poll (s)","0 disables"]])}
+    ${grp("Upstream", [
+      ["upstream.timeout_connect","float","Connect timeout (s)",""],
+      ["upstream.timeout_read","float","Read timeout (s)","long streams"],
+      ["upstream.max_attempts","int","Max attempts","per request, across accounts"],
+      ["upstream.anthropic_cache_control","bool","Anthropic cache_control","captured as always-on; test at false"]])}
+    ${grp("Models", [
+      ["models.default","text","Default model",""],
+      ["models.default_anthropic","text","Default Anthropic",""],
+      ["models.probe_unknown","bool","Probe unknown","learn body variant on first 400"]])}
+    ${grp("Logging", [
+      ["logging.level","text","Level","INFO · DEBUG · WARNING"],
+      ["logging.capture","bool","Capture exchanges","JSONL of every upstream call"]])}
+    ${grp("Updates", [
+      ["update.enabled","bool","Auto-check","check GitHub for new releases"],
+      ["update.interval_hours","float","Interval (h)","hours between checks"]])}
+    </div>
+    <div class="toolbar" style="margin-top:14px">
+      <button class="btn btn-pri" onclick="App.saveSettings()">Save</button>
+      <span style="color:var(--faint); font-size:12px">writes config.yaml — restart applies</span>
+      <div class="grow"></div>
+      <button class="btn btn-ghost btn-danger" onclick="App.regenKeys()">Regenerate keys</button>
+    </div></form>`;
+  }
+
+  async function saveSettings(){
+    const values = {};
+    document.querySelectorAll("[data-set]").forEach(el => { values[el.dataset.set] = el.value; });
+    try {
+      const r = await api("/admin/dash/settings", {method:"PUT", body:{values}});
+      toast(r.changed.length ? `saved ${r.changed.length} setting(s) — restart applies`
+                             : "no changes", "ok");
+    } catch (e) { toast("save: " + e.message, "err"); }
+  }
+  async function regenKeys(){
+    if (!confirm("Regenerate the admin key and first client key? Restart required.")) return;
+    toast("key rotation stays in the desktop launcher for now (it also restarts the gateway).", "warn");
+  }
+
+  /* ------------ tab: stats ------------ */
+  async function renderStats(v){
+    const s = await api("/admin/stats?since=0");
+    const kpi = (k, val) => `<div class="kpi"><div class="v">${val}</div><div class="k">${k}</div></div>`;
+    v.innerHTML = `
+      <div class="kpis">
+        ${kpi("requests", s.requests)}
+        ${kpi("tokens", (s.total_tokens||0).toLocaleString())}
+        ${kpi("ok", s.ok)}
+        ${kpi("402", s.insufficient_credits)}
+        ${kpi("429", s.rate_limited)}
+        ${kpi("avg ms", Math.round(s.avg_duration_ms||0))}
+      </div>
+      <div class="grid2">
+        <div class="card"><h2>By model</h2><canvas class="chart" id="ch-model"></canvas></div>
+        <div class="card"><h2>By account</h2><canvas class="chart" id="ch-acct"></canvas></div>
+      </div>
+      <div class="card"><h2>All usage rows (model · account)</h2>
+        <div class="scroll"><table><thead><tr><th>Model / Account</th><th>Requests</th><th>Tokens</th></tr></thead>
+        <tbody>
+          ${(s.by_model||[]).map(r=>`<tr><td class="mono">${esc(r.model||"—")}</td><td>${r.requests}</td><td>${(r.tokens||0).toLocaleString()}</td></tr>`).join("")}
+          ${(s.by_account||[]).map(r=>`<tr><td class="mono">${esc(r.account_id||"—")}</td><td>${r.requests}</td><td>${(r.tokens||0).toLocaleString()}</td></tr>`).join("")}
+        </tbody></table></div></div>`;
+    barChart($("#ch-model"), (s.by_model||[]).slice(0,10), "tokens", "model");
+    barChart($("#ch-acct"), (s.by_account||[]).slice(0,10), "tokens", "account_id");
+  }
+
+  function barChart(canvas, rows, valKey, labelKey){
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w*dpr; canvas.height = h*dpr;
+    const c = canvas.getContext("2d"); c.scale(dpr, dpr);
+    const max = Math.max(1, ...rows.map(r => r[valKey]||0));
+    const bw = rows.length ? Math.max(8, (w-60)/rows.length - 8) : 8;
+    c.strokeStyle = "#262c3a"; c.lineWidth = 1;
+    for (let i=1;i<4;i++){ const y = h-24 - (h-40)*i/4;
+      c.beginPath(); c.moveTo(46,y); c.lineTo(w-8,y); c.stroke(); }
+    rows.forEach((r,i)=>{
+      const x = 50 + i*((w-60)/Math.max(rows.length,1));
+      const bh = (h-44) * ((r[valKey]||0)/max);
+      c.fillStyle = "#8b7cf7";
+      c.fillRect(x, h-24-bh, bw, bh);
+      c.fillStyle = "#666e80"; c.font = "10px Segoe UI"; c.textAlign = "center";
+      const lbl = String(r[labelKey]||"—").split("/").pop().slice(0,10);
+      c.fillText(lbl, x+bw/2, h-10);
+    });
+  }
+
+  /* ------------ tab: logs ------------ */
+  async function renderLogs(v){
+    const level = document.getElementById("log-level")?.value || "";
+    const data = await api("/admin/dash/logs?limit=400" + (level ? "&level="+level : ""));
+    let html = `<div class="toolbar">
+      <select id="log-level" style="max-width:130px" onchange="App.renderLogs()">
+        ${["","INFO","WARNING","ERROR"].map(l =>
+          `<option value="${l}" ${l===level?"selected":""}>${l||"all"}</option>`).join("")}
+      </select>
+      <div class="grow"></div>
+      <button class="btn btn-ghost btn-sm" onclick="App.clearLogs()">Clear</button>
+    </div>
+    <div class="card" style="padding:12px 16px"><div class="mono-list">${
+      data.records.map(r => {
+        const col = r.level==="ERROR" ? "var(--err)" : r.level==="WARNING" ? "var(--warn)"
+                  : r.level==="DEBUG" ? "var(--faint)" : "var(--fg)";
+        return `<span style="color:var(--faint)">${r.time}</span> <span style="color:${col}">${r.level}</span> <span style="color:var(--muted)">${r.logger}:</span> ${esc(r.message)}`;
+      }).join("\n") || '<span style="color:var(--faint)">no log records yet</span>'
+    }</div></div>`;
+    v.innerHTML = html;
+  }
+  function clearLogs(){ /* ring buffer is process-side; just clear the view */
+    document.querySelector("#view .mono-list").innerHTML =
+      '<span style="color:var(--faint)">—</span>'; }
+
+  /* ------------ tab: guide ------------ */
+  function renderGuide(v){
+    v.innerHTML = `<div class="guide">
+    <div class="card"><h2>Add your first account</h2>
+      <div class="steps">
+        <div><b>1</b><span>Install the official Cline app</span></div>
+        <div><b>2</b><span>Sign in inside Cline (free)</span></div>
+        <div><b>3</b><span>Import here — done</span></div>
+      </div>
+      <ol>
+        <li>Download and open <a href="https://cline.bot" target="_blank" rel="noopener">Cline</a>,
+            then sign in (a Google account works; new accounts get free starting credit).</li>
+        <li>Come back to the <a href="#" onclick="App.tab('accounts');return false">Accounts</a>
+            tab and click <kbd>⤓ Import from Cline</kbd>. The signed-in account is snapshotted
+            into the <span class="mono">accounts\\</span> folder next to the exe.</li>
+        <li>Click <kbd>Reload pool</kbd>. The account shows <b>ready</b> and starts serving
+            requests immediately.</li>
+      </ol>
+      <p class="note">An account is just a token pair — importing copies it, it never signs
+        you out of Cline. Both apps can use the same account at the same time.</p>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>More accounts (load balancing)</h2>
+        <ol>
+          <li>In Cline, sign out and sign in with the next account.</li>
+          <li>Click <kbd>⤓ Import from Cline</kbd> again — each import adds one snapshot.</li>
+          <li><kbd>Reload pool</kbd>. Every account in the folder joins the rotation.</li>
+        </ol>
+        <p class="note">More accounts = more free-tier daily caps to spread across.
+          Tokens refresh themselves; a dead account needs one re-import.</p>
+      </div>
+      <div class="card"><h2>Accounts from another machine</h2>
+        <p style="color:var(--muted); font-size:13px">Copy any account snapshot
+          (<span class="mono">&lt;email&gt;.txt</span>) into the
+          <span class="mono">accounts\\</span> folder next to the exe, then
+          <kbd>Reload pool</kbd>. Snapshots are portable between machines.</p>
+      </div>
+      <div class="card"><h2>Point your tools at it</h2>
+        <p style="color:var(--muted); font-size:13px">Use the endpoints and keys on the
+          <a href="#" onclick="App.tab('server');return false">Server</a> tab with any
+          OpenAI- or Anthropic-compatible client (Kilo, Cline's openai-compatible
+          provider, the SDKs, curl).</p>
+      </div>
+      <div class="card"><h2>Stopping</h2>
+        <p style="color:var(--muted); font-size:13px">The <kbd>Stop</kbd> button (top right)
+          or simply closing the window quits the tool and frees the port. Launch the exe
+          again to start it back up.</p>
+      </div>
+      <div class="card"><h2>Updates</h2>
+        <p style="color:var(--muted); font-size:13px">The tool checks for new releases
+          automatically. When one exists, a <b>🔔</b> appears in the top bar — click it,
+          then <kbd>Update now</kbd>. The tool downloads the new exe, swaps it in, and
+          relaunches itself. Turn this off in Settings → Updates.</p>
+      </div>
+    </div></div>`;
+  }
+
+  /* ------------ tab switching + polling ------------ */
+  const RENDER = {accounts:renderAccounts, models:renderModels, server:renderServer,
+                  settings:renderSettings, stats:renderStats, logs:renderLogs,
+                  guide:renderGuide};
+
+  function tab(name){
+    curTab = name;
+    document.querySelectorAll(".nav-btn").forEach(b =>
+      b.classList.toggle("on", b.dataset.tab === name));
+    $("#tab-title").textContent = name[0].toUpperCase() + name.slice(1);
+    refresh();
+    restartTimer();
+  }
+  function refresh(){
+    const v = $("#view");
+    if (curTab === "accounts") { const q = $("#acct-q"); if (q) cache.acctQ = q.value; }
+    if (curTab === "models")   { const q = $("#mdl-q");  if (q) cache.mdlQ  = q.value; }
+    RENDER[curTab](v).catch(e => { v.innerHTML =
+      `<div class="card"><div class="empty"><h3>Could not load</h3><p>${esc(e.message)}</p></div></div>`; });
+    paintChips();
+  }
+  function restartTimer(){
+    clearInterval(timer);
+    // live tabs poll; static tabs don't
+    const live = {accounts:4000, models:6000, logs:3000, stats:8000}[curTab];
+    if (live) timer = setInterval(() => refresh(), live);
+  }
+
+  /* ------------ boot ------------ */
+  async function boot(){
+    paintChips();
+    tab("accounts");
+    try {
+      const s = await api("/admin/dash/server");
+      $("#foot-ver").textContent = "v" + s.version + " · " + s.host + ":" + s.port;
+    } catch (e) {}
+    setInterval(paintChips, 10000);   // chips poll independently of tab polling
+  }
+  async function start(){
+    if (!key) {
+      // maybe the key was never needed (single-user local default)? probe once
+      try { await api("/admin/dash/server"); }
+      catch (e) { showLogin(); return; }
+    }
+    try { await api("/admin/dash/server"); } catch (e) { showLogin(); return; }
+    hideLogin(); boot();
+  }
+
+  return {start, login, tab, refresh, renderAccounts, renderModels, renderLogs,
+          sortModels, doImport, doReload, acct, acctRemove, saveSettings,
+          regenKeys, clearLogs, toggleServer, copy,
+          showUpdate, hideUpdate, skipUpdate, doUpdate};
+})();
+window.addEventListener("DOMContentLoaded", App.start);
+</script>
+</body>
+</html>

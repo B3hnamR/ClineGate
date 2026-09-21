@@ -1,0 +1,91 @@
+# Cline Gateway — example configuration
+# Copy to config.yaml and edit. Every field is optional except `accounts` source.
+
+server:
+  host: 127.0.0.1
+  port: 8787
+  # Bearer keys clients must present. Leave empty to allow any key (localhost only).
+  client_keys:
+    - key: gw-local-1
+      name: local
+      # Optional per-key rate limit (requests per minute). 0 = unlimited.
+      rpm: 0
+  # Require a key on /v1/* routes. Admin routes always require the admin key.
+  require_client_key: true
+  # CHANGE THESE — or delete config.yaml and let the exe regenerate random ones.
+  admin_key: gw-admin-change-me
+
+upstream:
+  base_url: https://api.cline.bot/api/v1
+  chat_path: /chat/completions
+  timeout_connect: 15
+  timeout_read: 600          # streaming responses can be long
+  max_attempts: 3            # per request, across accounts
+  # The anthropic body variant always carried `cache_control` in the capture.
+  # Flip to false to run the live experiment (is it required or optional?).
+  anthropic_cache_control: true
+  # Frozen client fingerprint from the Phase-1 capture. Do not edit unless
+  # re-captured — the gateway rejects requests without it.
+  fingerprint:
+    user_agent: "Cline/0.0.28 ai-sdk/openai-compatible/3.0.37 ai-sdk/provider-utils/5.0.30 runtime/bun/1.3.13"
+    client_version: "0.0.28"
+    core_version: "0.0.83"
+    platform: "Cline Desktop"
+
+pool:
+  strategy: least_in_flight     # round_robin | least_recently_used | least_in_flight | quota_aware
+  min_balance_micro: 0          # quota_aware: exclude accounts at/below this balance
+  refresh_lead_seconds: 600     # refresh tokens this long before expiry
+  cooldown_seconds: 30          # 429 / 5xx cooldown
+  max_in_flight_per_account: 4
+  acquire_wait_seconds: 5       # wait this long for an in-flight slot when every
+                                # account is at max_in_flight_per_account (0 = fail fast)
+  balance_poll_seconds: 300     # 0 disables background balance polling
+
+accounts:
+  # Where to load credentials from.
+  #   providers_json -> read ~/.cline/data/settings/providers.json (the live desktop config)
+  #   pool_file      -> read the gateway's own pool.json
+  source: accounts_dir
+  providers_json: "~/.cline/data/settings/providers.json"
+  dir: "./accounts"
+  pool_file: "./pool.json"
+
+models:
+  # Exposed model aliases. Left side is what clients may send; right side is the
+  # upstream Cline model id. Anything not listed is passed through unchanged.
+  aliases:
+    claude-3-5-sonnet-latest: anthropic/claude-opus-5
+    claude-sonnet-4-20250514: anthropic/claude-opus-5
+    claude-opus-4-1: anthropic/claude-opus-5
+    gpt-4o: openai/gpt-6-astra
+    gpt-4o-mini: cline-free/solar-pro4
+  default: cline-free/deepseek-v4.1-flash
+  # Used when an anthropic-dialect client sends an unknown claude-* name.
+  default_anthropic: anthropic/claude-opus-5
+  default_max_tokens: 32000
+  # Probe unknown models once to infer their upstream body variant.
+  probe_unknown: true
+  # When every account is capped for the selected free model, try this order.
+  # (Defined once — this file previously listed the key twice and YAML silently
+  #  kept only the second. This chain matches the GUI's built-in default.)
+  auto_free_fallback:
+    enabled: false
+    chain:
+      - cline-free/deepseek-v4.1-flash
+      - cline-free/muse-spark-1.3-contributor
+      - cline-free/solar-pro4
+
+logging:
+  level: INFO
+  # JSONL of every upstream exchange, same record shape as the Phase-1 capture.
+  capture: true
+  capture_dir: ./logs
+
+store:
+  sqlite_path: ./gateway.db
+
+update:
+  enabled: true           # check GitHub Releases for new versions
+  repo: B3hnamR/ClineGate
+  interval_hours: 6

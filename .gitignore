@@ -1,0 +1,29 @@
+# ClineGate — local build/test artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# build output
+build/
+dist/
+*.spec
+*.new.exe
+
+# runtime data (created beside the exe on first run)
+config.yaml
+gateway.db
+gateway.db-journal
+gateway.db-wal
+gateway.db-shm
+pool.json
+logs/
+*.jsonl
+accounts/
+secrets/
+*.har
+
+# local config copies
+config.local.yaml

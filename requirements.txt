@@ -1,0 +1,16 @@
+# Cline Gateway runtime dependencies
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+httpx>=0.27,<1.0
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0
+PyYAML>=6.0,<7.0
+sse-starlette>=2.1,<3.0
+python-multipart>=0.0.12,<1.0
+
+# desktop shell (WebView2 window for the dashboard)
+pywebview>=6.0,<7.0
+pythonnet>=3.0,<4.0
+
+# asset tooling (tools/make_icon.py)
+Pillow>=10.0,<12.0
