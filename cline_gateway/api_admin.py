@@ -125,9 +125,12 @@ async def check_balance(request: Request, account_id: str,
     account = await state.pool.find(account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
-    balance = await state.tokens.fetch_balance(account)
+    # full check, not a bare fetch: settles paid_exhausted + plan now
+    await state.tokens.check_account(account)
     me = await state.tokens.fetch_me(account)
-    return {"account_id": account_id, "balance_micro": balance, "me": me}
+    return {"account_id": account_id, "balance_micro": account.balance_micro,
+            "paid_exhausted": account.paid_exhausted, "has_plan": account.has_plan,
+            "me": me}
 
 
 @router.post("/pool/reload")
@@ -155,7 +158,7 @@ async def reload_pool(request: Request, key: str = Depends(admin_key)) -> dict:
             # routing) should see fresh data on import, not after the 300s
             # background poller. Best-effort — upstream may be unreachable.
             try:
-                await state.tokens.fetch_balance(account)
+                await state.tokens.check_account(account)
             except Exception:
                 pass
             try:

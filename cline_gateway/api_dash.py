@@ -7,6 +7,7 @@ so free-form key editing is a footgun.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -189,6 +190,76 @@ async def dash_import(request: Request, key: str = Depends(admin_key)) -> dict:
         raise HTTPException(status_code=500,
                             detail=f"import failed ({exc.__class__.__name__})") from exc
     return result
+
+
+# ---- login with Cline (WorkOS device-code flow) --------------------------- #
+
+def _device_login(request: Request):
+    """The in-flight DeviceLogin for this app state, if any."""
+    return getattr(get_state(request), "device_login", None)
+
+
+@router.post("/admin/dash/auth/login/start")
+async def login_start(request: Request, key: str = Depends(admin_key)) -> dict:
+    """Begin a device-code login: returns the code + URL for the user."""
+    state = get_state(request)
+    if state.cfg.accounts.source != "accounts_dir":
+        raise HTTPException(status_code=400,
+                            detail="login writes account snapshots; set "
+                                   "accounts.source=accounts_dir first")
+    existing = _device_login(request)
+    if existing and existing.state in ("awaiting_user", "registering"):
+        return existing.status()          # one flow at a time; idempotent start
+    from .device_auth import DeviceLogin
+
+    async def _add_and_probe(account):
+        """New account: join the pool, then settle balance/paid-lane/plan now —
+        a login that replaced an exhausted account must not read 'available'."""
+        await state.pool.upsert(account)
+        try:
+            await state.tokens.check_account(account)
+        except Exception:
+            log.warning("post-login account check failed for %s", account.id)
+
+    login = DeviceLogin(Path(state.cfg.accounts.dir),
+                        on_account=_add_and_probe)
+    state.device_login = login
+    task = asyncio.create_task(login.run(), name="device-login")
+    login._task = task
+    # wait (briefly) for the code so the UI can show it immediately
+    try:
+        await asyncio.wait_for(login._ready.wait(), timeout=20)
+    except asyncio.TimeoutError:
+        pass
+    return login.status()
+
+
+@router.get("/admin/dash/auth/login/status")
+async def login_status(request: Request, key: str = Depends(admin_key)) -> dict:
+    login = _device_login(request)
+    if login is None:
+        return {"state": "idle"}
+    status = login.status()
+    # a finished login has already been persisted + pooled inside run();
+    # surface the resulting account id so the UI can refresh the table
+    if login.state == "done" and login.snapshot_path is not None:
+        status["snapshot"] = login.snapshot_path.name
+    return status
+
+
+@router.post("/admin/dash/auth/login/cancel")
+async def login_cancel(request: Request, key: str = Depends(admin_key)) -> dict:
+    login = _device_login(request)
+    if login is None:
+        return {"state": "idle"}
+    login.cancel()
+    task = getattr(login, "_task", None)
+    if task is not None and not task.done():
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
+    return login.status()
 
 
 @router.get("/admin/dash/cline-status")

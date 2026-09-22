@@ -308,34 +308,41 @@ class TokenManager:
             except asyncio.TimeoutError:
                 pass
 
+    async def check_account(self, account: Account) -> None:
+        """Balance + paid-lane threshold + plan for one account, in one pass.
+
+        The threshold logic used to live only in the periodic sweep, so the
+        manual balance check and freshly added accounts (import, device login)
+        showed an optimistic paid lane for up to one poll interval. Every path
+        that learns a balance now settles the paid lane immediately.
+        """
+        bal = await self.fetch_balance(account)
+        if bal is not None:
+            if bal <= self.cfg.pool.min_balance_micro:
+                if not account.paid_exhausted:
+                    log.info("account %s balance=%s (<= threshold), "
+                             "retiring", account.id, bal)
+                    await self.pool.retire(
+                        account, reason="balance_threshold")
+            elif account.paid_exhausted or account.state is AccountState.EXHAUSTED:
+                # topped up since the last check: back into rotation.
+                log.info("account %s balance=%s recovered, "
+                         "restoring paid lane", account.id, bal)
+                await self.pool.restore(account)
+
+        # a plan record gates cline-pass/* and cline-cloud/*; keep it fresh
+        # (re-check hourly) so availability answers "no subscription"
+        # instead of guessing — and a plan bought later is picked up.
+        if account.has_plan is None or time.time() - (
+                account.plan_checked_at or 0) > 3600:
+            await self.fetch_plan(account)
+
     async def balance_sweep(self) -> None:
         """One pass over the pool: poll balances, retire/restore paid lanes, refresh plans."""
         for account in await self.pool.all():
             if not account.access_token:
                 continue
-            bal = await self.fetch_balance(account)
-            if bal is not None:
-                if bal <= self.cfg.pool.min_balance_micro:
-                    if not account.paid_exhausted:
-                        log.info("account %s balance=%s (<= threshold), "
-                                 "retiring", account.id, bal)
-                        await self.pool.retire(
-                            account, reason="balance_threshold")
-                elif account.paid_exhausted or account.state is AccountState.EXHAUSTED:
-                    # topped up since the last poll: back into rotation.
-                    # Without this a recharged account stayed retired
-                    # until a manual /enable or a restart.
-                    log.info("account %s balance=%s recovered, "
-                             "restoring paid lane", account.id, bal)
-                    await self.pool.restore(account)
-
-            # a plan record gates cline-pass/* and cline-cloud/*; keep it
-            # fresh (re-check hourly) so availability can answer "no
-            # subscription" instead of guessing from balance — and so a
-            # subscription bought later is actually picked up.
-            if account.has_plan is None or time.time() - (
-                    account.plan_checked_at or 0) > 3600:
-                await self.fetch_plan(account)
+            await self.check_account(account)
 
     async def balance_loop(self) -> None:
         """Poll per-account balance (drives quota_aware routing)."""

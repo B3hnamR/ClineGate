@@ -175,16 +175,23 @@ th .arr{font-size:9px; margin-left:3px; color:var(--accent-soft)}
   padding:1px 7px; font:12px "Cascadia Mono",monospace}
 
 /* ---------- confirm modal ---------- */
-#confirm-modal{position:fixed; inset:0; background:rgba(5,7,10,.62); display:none;
-  align-items:center; justify-content:center; z-index:70}
-#confirm-modal .confirm-card{background:var(--card); border:1px solid var(--border);
+#confirm-modal, #login-modal{position:fixed; inset:0; background:rgba(5,7,10,.72);
+  display:none; align-items:center; justify-content:center; z-index:70}
+.confirm-card{background:var(--card); border:1px solid var(--border);
   border-radius:12px; padding:18px 20px; width:380px; max-width:90vw;
   box-shadow:0 16px 50px rgba(0,0,0,.55)}
-#confirm-modal b{font:600 14px "Segoe UI Semibold",sans-serif}
-#confirm-modal p{color:var(--muted); font-size:13px; margin-top:8px; white-space:pre-wrap}
+.confirm-card b{font:600 14px "Segoe UI Semibold",sans-serif}
+.confirm-card p{color:var(--muted); font-size:13px; margin-top:8px; white-space:pre-wrap}
 .confirm-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:16px}
 .btn-danger-solid{background:var(--err); color:#26090e}
 .btn-danger-solid:hover{background:#ff8595}
+
+/* ---------- login-with-cline modal ---------- */
+#login-modal .confirm-card{width:440px}
+#lg-code{font:700 34px "Cascadia Mono",monospace; letter-spacing:.08em; text-align:center;
+  color:var(--accent-soft); background:var(--field); border:1px solid var(--border);
+  border-radius:10px; padding:14px; margin:12px 0; user-select:all; cursor:pointer}
+#lg-status{color:var(--muted); font-size:13px; text-align:center; min-height:20px}
 ::-webkit-scrollbar{width:10px; height:10px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--elev); border-radius:6px; border:2px solid var(--bg)}
@@ -252,6 +259,25 @@ th .arr{font-size:9px; margin-left:3px; color:var(--accent-soft)}
       <button class="btn btn-ghost btn-sm" id="cf-cancel">Cancel</button>
       <button class="btn btn-pri btn-sm" id="cf-ok">OK</button>
     </div>
+  </div>
+</div>
+
+<!-- login-with-cline modal -->
+<div id="login-modal">
+  <div class="confirm-card" style="text-align:center">
+    <b>Login with Cline</b>
+    <p style="color:var(--muted); font-size:13px; margin-top:8px">
+      Open the login page and approve this code — no Cline install needed.</p>
+    <p style="color:var(--warn); font-size:12.5px; margin-top:6px">
+      ⚠ Make sure you sign in with the account you want to add — if the browser
+      is already logged in as someone else, sign out first.</p>
+    <div id="lg-code" title="click to copy">…</div>
+    <div style="display:flex; gap:8px; justify-content:center; margin-bottom:12px">
+      <a class="btn btn-pri btn-sm" id="lg-link" href="#" target="_blank" rel="noopener"
+         style="text-decoration:none; display:inline-flex; align-items:center">Open login page</a>
+      <button class="btn btn-quiet btn-sm" id="lg-cancel" onclick="App.loginCancel()">Cancel</button>
+    </div>
+    <div id="lg-status"></div>
   </div>
 </div>
 
@@ -451,7 +477,8 @@ const App = (() => {
       api("/admin/accounts"), api("/admin/pool/state")]);
     const rows = accs.accounts;
     let html = `<div class="toolbar">
-      <button class="btn btn-pri" onclick="App.doImport()">⤓ Import from Cline</button>
+      <button class="btn btn-pri" onclick="App.loginStart()">🔑 Login with Cline</button>
+      <button class="btn btn-ghost" onclick="App.doImport()">⤓ Import from Cline app</button>
       <button class="btn btn-ghost" onclick="App.doReload()">Reload pool</button>
       <button class="btn btn-quiet" onclick="App.refresh()">Refresh</button>
       <div class="grow"></div>
@@ -461,13 +488,14 @@ const App = (() => {
     if (!rows.length) {
       html += `<div class="card"><div class="empty">
         <h3>No accounts yet</h3>
-        <p>Get started in three steps — your account joins the pool immediately.</p>
+        <p>Two ways in — no Cline install needed for the first one.</p>
         <div class="steps" style="justify-content:center">
-          <div><b>1</b><span>Install the official Cline app</span></div>
-          <div><b>2</b><span>Sign in inside Cline</span></div>
-          <div><b>3</b><span>Click Import — done</span></div>
+          <div><b>1</b><span>Click Login with Cline</span></div>
+          <div><b>2</b><span>Approve the code in your browser</span></div>
+          <div><b>3</b><span>Account joins the pool — done</span></div>
         </div>
-        <button class="btn btn-pri" onclick="App.doImport()">Import from Cline</button>
+        <button class="btn btn-pri" onclick="App.loginStart()">🔑 Login with Cline</button>
+        <button class="btn btn-ghost" onclick="App.doImport()">Import from Cline app</button>
         <button class="btn btn-ghost" onclick="App.tab('guide')">Setup guide</button>
       </div></div>`;
     } else {
@@ -541,6 +569,73 @@ const App = (() => {
       toast("removed", "ok"); renderAccounts($("#view")); paintChips(); }
     catch (e) { toast(e.message, "err"); }
   }
+
+  /* ------------ login with Cline (device-code flow) ------------ */
+  let loginTimer = null;
+  async function loginStart(){
+    try {
+      const s = await api("/admin/dash/auth/login/start", {method:"POST"});
+      showLoginModal(s);
+    } catch (e) { toast("login: " + e.message, "err"); }
+  }
+  function showLoginModal(s){
+    $("#login-modal").style.display = "flex";
+    paintLogin(s);
+    if (loginTimer) clearInterval(loginTimer);
+    loginTimer = setInterval(pollLogin, 1500);
+  }
+  function paintLogin(s){
+    $("#lg-code").textContent = s.user_code || "…";
+    if (s.verification_url) $("#lg-link").href = s.verification_url;
+    const msg = {
+      awaiting_user: "Approve the login in your browser — this updates itself.",
+      registering:   "approved — registering the account…",
+      done:          "account added ✓",
+      expired:       "the code expired — close this and start again",
+      cancelled:     "cancelled",
+      error:         s.error || "something went wrong",
+    }[s.state] || s.state || "starting…";
+    $("#lg-status").textContent = msg;
+  }
+  async function pollLogin(){
+    let s;
+    try { s = await api("/admin/dash/auth/login/status"); }
+    catch (e) { return; }                          // keep polling
+    paintLogin(s);
+    if (["done","error","expired","cancelled"].includes(s.state)) {
+      clearInterval(loginTimer); loginTimer = null;
+      const msg = {
+        done:      "account added: " + (s.email || "unknown"),
+        cancelled: "login cancelled",
+        expired:   "login code expired — try again",
+        error:     "login failed: " + (s.error || "unknown error"),
+      }[s.state];
+      if (s.state === "done") {
+        toast(msg, "ok");
+        setTimeout(() => { hideLoginModal();
+          renderAccounts($("#view")); paintChips(); }, 1200);
+      } else if (s.state === "cancelled") {
+        hideLoginModal();
+      } else {
+        // denied / expired / error: say why, then close on its own
+        toast(msg, s.state === "expired" ? "warn" : "err");
+        setTimeout(hideLoginModal, 1600);
+      }
+    }
+  }
+  async function loginCancel(){
+    try { await api("/admin/dash/auth/login/cancel", {method:"POST"}); } catch (_) {}
+    hideLoginModal();
+  }
+  function hideLoginModal(){
+    if (loginTimer) { clearInterval(loginTimer); loginTimer = null; }
+    $("#login-modal").style.display = "none";
+  }
+  // copy the code on click
+  document.addEventListener("click", e => {
+    if (e.target && e.target.id === "lg-code" && e.target.textContent !== "…")
+      copy(e.target.textContent);
+  });
 
   /* ------------ tab: models ------------ */
   const STATUS_RANK = {available:0, cooling:1, partial:1, capped:2,
@@ -796,21 +891,20 @@ api_key: ${esc(s.admin_key)}   # or any client key</p>
     v.innerHTML = `<div class="guide">
     <div class="card"><h2>Add your first account</h2>
       <div class="steps">
-        <div><b>1</b><span>Install the official Cline app</span></div>
-        <div><b>2</b><span>Sign in inside Cline (free)</span></div>
-        <div><b>3</b><span>Import here — done</span></div>
+        <div><b>1</b><span>Click Login with Cline</span></div>
+        <div><b>2</b><span>Approve the code in your browser</span></div>
+        <div><b>3</b><span>Done — no Cline install needed</span></div>
       </div>
       <ol>
-        <li>Download and open <a href="https://cline.bot" target="_blank" rel="noopener">Cline</a>,
-            then sign in (a Google account works; new accounts get free starting credit).</li>
-        <li>Come back to the <a href="#" onclick="App.tab('accounts');return false">Accounts</a>
-            tab and click <kbd>⤓ Import from Cline</kbd>. The signed-in account is snapshotted
-            into the <span class="mono">accounts\\</span> folder next to the exe.</li>
-        <li>Click <kbd>Reload pool</kbd>. The account shows <b>ready</b> and starts serving
-            requests immediately.</li>
+        <li>On the <a href="#" onclick="App.tab('accounts');return false">Accounts</a>
+            tab, click <kbd>🔑 Login with Cline</kbd>. A short code appears.</li>
+        <li>Click <kbd>Open login page</kbd>, sign in (a Google account works; new
+            accounts get free starting credit), and approve the code.</li>
+        <li>The account is registered, snapshotted into
+            <span class="mono">accounts\\</span>, and joins the pool automatically.</li>
       </ol>
-      <p class="note">An account is just a token pair — importing copies it, it never signs
-        you out of Cline. Both apps can use the same account at the same time.</p>
+      <p class="note">Already have Cline installed and signed in? <kbd>⤓ Import from
+        Cline</kbd> snapshots the app’s current account instead — same result.</p>
     </div>
     <div class="grid2">
       <div class="card"><h2>More accounts (load balancing)</h2>
@@ -899,7 +993,8 @@ api_key: ${esc(s.admin_key)}   # or any client key</p>
   return {start, login, tab, refresh, renderAccounts, renderModels, renderLogs,
           sortModels, doImport, doReload, acct, acctRemove, saveSettings,
           regenKeys, clearLogs, toggleServer, copy,
-          showUpdate, hideUpdate, skipUpdate, doUpdate};
+          showUpdate, hideUpdate, skipUpdate, doUpdate,
+          loginStart, loginCancel};
 })();
 window.addEventListener("DOMContentLoaded", App.start);
 </script>

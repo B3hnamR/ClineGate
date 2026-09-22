@@ -357,3 +357,66 @@ def test_gui_balance_column_formats_micro_usd():
     assert format_balance({"balance_micro": None, "notes": {}}) == "?"
     assert format_balance({}) == "?"
     assert format_balance({"notes": {"balance_usd": "junk"}}) == "?"
+
+# --------------------------------------------------------------------------- #
+# check_account: immediate settle on every path that learns a balance
+# (previously the threshold logic only ran in the 300s sweep, so the manual
+# $ button and freshly added accounts showed an optimistic paid lane)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_check_account_settles_paid_lane_immediately(tmp_path):
+    cfg, pool, mgr = await _mgr_with_balances(tmp_path, {"a1": -500})
+    try:
+        a1 = await pool.find("a1")
+        assert a1.paid_exhausted is False
+        await mgr.check_account(a1)              # no sweep involved
+        assert a1.balance_micro == -500
+        assert a1.paid_exhausted is True
+        assert a1.state is AccountState.READY
+    finally:
+        await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_check_account_restores_recovered_lane(tmp_path):
+    cfg, pool, mgr = await _mgr_with_balances(tmp_path, {"a1": 1_000_000})
+    try:
+        a1 = await pool.find("a1")
+        a1.paid_exhausted = True                 # as if a prior 402 retired it
+        await mgr.check_account(a1)
+        assert a1.paid_exhausted is False
+    finally:
+        await mgr.aclose()
+
+
+@pytest.mark.asyncio
+async def test_balance_endpoint_applies_threshold_not_just_fetches(tmp_path):
+    """POST /admin/accounts/{id}/balance must settle the paid lane too."""
+    from fastapi.testclient import TestClient
+
+    from cline_gateway.app import create_app
+    from cline_gateway.config import load_config
+
+    cfg = load_config()
+    cfg.update.enabled = False
+    cfg.accounts.source = "accounts_dir"
+    cfg.accounts.dir = str(tmp_path / "accounts")
+    app = create_app(cfg)
+    with TestClient(app) as client:
+        state = app.state.app_state
+        account = Account(id="b1", access_token="workos:b1")
+        await state.pool.upsert(account)
+        original = state.tokens._client
+        state.tokens._client = _BalanceStub({"b1": -50})
+        try:
+            r = client.post(f"/admin/accounts/b1/balance",
+                            headers={"Authorization": f"Bearer {cfg.server.admin_key}"})
+            assert r.status_code == 200
+            body = r.json()
+            assert body["balance_micro"] == -50
+            assert body["paid_exhausted"] is True       # settled now, not later
+            assert account.paid_exhausted is True
+        finally:
+            state.tokens._client = original
