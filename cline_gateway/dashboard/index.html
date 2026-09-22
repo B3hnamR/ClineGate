@@ -173,6 +173,18 @@ th .arr{font-size:9px; margin-left:3px; color:var(--accent-soft)}
 .guide .note{color:var(--faint); font-size:12px; margin-top:8px}
 .guide kbd{background:var(--elev); border:1px solid var(--border); border-radius:5px;
   padding:1px 7px; font:12px "Cascadia Mono",monospace}
+
+/* ---------- confirm modal ---------- */
+#confirm-modal{position:fixed; inset:0; background:rgba(5,7,10,.62); display:none;
+  align-items:center; justify-content:center; z-index:70}
+#confirm-modal .confirm-card{background:var(--card); border:1px solid var(--border);
+  border-radius:12px; padding:18px 20px; width:380px; max-width:90vw;
+  box-shadow:0 16px 50px rgba(0,0,0,.55)}
+#confirm-modal b{font:600 14px "Segoe UI Semibold",sans-serif}
+#confirm-modal p{color:var(--muted); font-size:13px; margin-top:8px; white-space:pre-wrap}
+.confirm-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:16px}
+.btn-danger-solid{background:var(--err); color:#26090e}
+.btn-danger-solid:hover{background:#ff8595}
 ::-webkit-scrollbar{width:10px; height:10px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--elev); border-radius:6px; border:2px solid var(--bg)}
@@ -230,6 +242,18 @@ th .arr{font-size:9px; margin-left:3px; color:var(--accent-soft)}
 </div>
 
 <div id="toast"></div>
+
+<!-- in-app confirm dialog -->
+<div id="confirm-modal">
+  <div class="confirm-card">
+    <b id="cf-title"></b>
+    <p id="cf-body"></p>
+    <div class="confirm-actions">
+      <button class="btn btn-ghost btn-sm" id="cf-cancel">Cancel</button>
+      <button class="btn btn-pri btn-sm" id="cf-ok">OK</button>
+    </div>
+  </div>
+</div>
 
 <!-- update available card -->
 <div id="update-card" style="display:none; position:fixed; top:64px; right:22px; z-index:60;
@@ -321,6 +345,32 @@ const App = (() => {
     hideLogin(); boot();
   }
 
+  /* ------------ confirm dialog (replaces native confirm()) ------------ */
+  function confirmDlg(title, body, okLabel = "OK", danger = false){
+    return new Promise(resolve => {
+      const m = $("#confirm-modal");
+      $("#cf-title").textContent = title;
+      $("#cf-body").textContent = body;
+      const ok = $("#cf-ok");
+      ok.textContent = okLabel;
+      ok.className = "btn btn-sm " + (danger ? "btn-danger-solid" : "btn-pri");
+      m.style.display = "flex";
+      const done = v => {
+        m.style.display = "none";
+        ok.onclick = null; $("#cf-cancel").onclick = null;
+        m.onclick = null; document.onkeydown = null;
+        resolve(v);
+      };
+      ok.onclick = () => done(true);
+      $("#cf-cancel").onclick = () => done(false);
+      m.onclick = e => { if (e.target === m) done(false); };
+      document.onkeydown = e => {
+        if (e.key === "Escape") done(false);
+        if (e.key === "Enter") done(true);
+      };
+    });
+  }
+
   /* ------------ updates ------------ */
   let updStatus = null;
   async function pollUpdate(){
@@ -386,8 +436,9 @@ const App = (() => {
 
   async function toggleServer(){
     if (!serverUp) { toast("gateway is not running", "warn"); return; }
-    if (!confirm("Stop the gateway and quit the tool?\n\n" +
-                 "The process exits and frees the port. Relaunch ClineGateway.exe to start it again.")) return;
+    if (!(await confirmDlg("Stop the gateway?",
+        "The process exits and frees the port.\nRelaunch ClineGateway.exe to start it again.",
+        "Stop", true))) return;
     try { await api("/admin/dash/shutdown", {method: "POST"}); } catch (_) {}
     serverUp = false; paintChips();
     $("#btn-toggle").textContent = "Stopped";
@@ -483,7 +534,9 @@ const App = (() => {
     } catch (e) { toast(e.message, "err"); }
   }
   async function acctRemove(id){
-    if (!confirm(`Remove ${id} from the pool?`)) return;
+    if (!(await confirmDlg("Remove account?",
+        `${id} leaves the pool and stops serving requests.`,
+        "Remove", true))) return;
     try { await api(`/admin/accounts/${encodeURIComponent(id)}`, {method:"DELETE"});
       toast("removed", "ok"); renderAccounts($("#view")); paintChips(); }
     catch (e) { toast(e.message, "err"); }
@@ -658,7 +711,9 @@ api_key: ${esc(s.admin_key)}   # or any client key</p>
     } catch (e) { toast("save: " + e.message, "err"); }
   }
   async function regenKeys(){
-    if (!confirm("Regenerate the admin key and first client key? Restart required.")) return;
+    if (!(await confirmDlg("Regenerate keys?",
+        "The admin key and first client key change.\nClients using the old keys stop working. Restart required.",
+        "Regenerate", true))) return;
     toast("key rotation stays in the desktop launcher for now (it also restarts the gateway).", "warn");
   }
 
