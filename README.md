@@ -26,13 +26,16 @@ That's the whole install.
 
 ## First account in 60 seconds
 
-1. Install the official [Cline](https://cline.bot) app and sign in
-   (a free account works).
-2. Open ClineGate → **Accounts** → **⤓ Import from Cline**.
-3. Click **Reload pool**. The account shows **ready** and starts serving.
+1. Open ClineGate → **Accounts** → **🔑 Login with Cline**.
+2. A short code appears — click **Open login page** and approve it in your
+   browser (a Google account works; new accounts get free starting credit).
+3. The account registers, lands in `accounts\`, and starts serving — no
+   reload needed.
 
-More detail lives in the app's built-in **Guide** tab: multiple accounts,
-moving accounts between machines, and connecting clients.
+No Cline install required. Already have the Cline desktop app signed in?
+**⤓ Import from Cline app** snapshots that account instead — same result.
+Both paths are explained in the app's built-in **Guide** tab, along with
+multiple accounts, moving accounts between machines, and connecting clients.
 
 ## Use it from your tools
 
@@ -57,8 +60,12 @@ curl http://127.0.0.1:8787/v1/chat/completions `
 
 ## What it does
 
+- **Login with Cline** — add accounts by approving a short device code in your
+  browser. No Cline desktop install, no token copying; the account is
+  registered, snapshotted, and pooled automatically.
 - **Multi-account pool** with load balancing (least-in-flight, round-robin,
-  LRU, quota-aware) and per-account in-flight caps.
+  LRU, quota-aware) and per-account in-flight caps. Balance and paid-lane
+  state settle the moment an account is added or checked.
 - **Automatic token refresh** — access tokens expire hourly; ClineGate renews
   them in the background and retries transparently on a 401.
 - **Lane-aware failover** — free models, credit-billed models, and
