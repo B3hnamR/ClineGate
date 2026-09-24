@@ -70,13 +70,25 @@ def build_headers(access_token: str, fp, task_id: str | None = None) -> dict[str
 VARIANTS = ("default", "anthropic", "openai-nextgen", "reasoning")
 
 # Effort values clients send, normalised to what the upstream accepts.
-# `none`/`off` disable thinking; `minimal`/`low` sit below this family's floor
-# (the Cline client's own lowest observed value is "medium").
+# `none`/`off` disable thinking; `extra` is the Cline picker's top level and
+# the wire value is `xhigh` (captured 2026-09-24). `minimal` sits below every
+# observed family floor. `low` is real for gemini-3.8-flash (captured) but was
+# never observed for kimi-k3, whose client floor is `medium` — that one stays
+# family-specific in _normalise_effort.
 _EFFORT_ALIASES = {
     "none": "none", "off": "none", "disabled": "none", "false": "none",
-    "minimal": "medium", "low": "medium",
-    "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh",
+    "minimal": "medium",
+    "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh",
+    "extra": "xhigh", "max": "xhigh",
 }
+
+
+def _normalise_effort(requested: str, model: str = "") -> str | None:
+    """Client effort string -> the upstream value it maps to, or None."""
+    mapped = _EFFORT_ALIASES.get(requested)
+    if requested == "low" and "kimi" in (model or "").lower():
+        return "medium"          # kimi family floor (never observed below)
+    return mapped
 
 
 def _client_effort(payload: dict[str, Any]) -> str | None:
@@ -129,10 +141,11 @@ def build_upstream_body(payload: dict[str, Any], variant: str,
     }
 
     if variant == "reasoning":
-        # Captured 2026-09-19 (cline-free/kimi-k3): this family sends NEITHER
-        # max_tokens NOR max_completion_tokens, and drives thinking with either
+        # Captured 2026-09-19 (cline-free/kimi-k3) and 2026-09-24
+        # (cline-free/gemini-3.8-flash): this family sends NEITHER max_tokens
+        # NOR max_completion_tokens, and drives thinking with either
         # {"reasoning": {"enabled": false}} or a reasoning_effort of
-        # "medium" | "high" | "xhigh".
+        # "low" | "medium" | "high" | "xhigh".
         reasoning = payload.get("reasoning")
         if isinstance(reasoning, dict) and not reasoning.get("effort"):
             body["reasoning"] = reasoning
@@ -145,19 +158,42 @@ def build_upstream_body(payload: dict[str, Any], variant: str,
                     body["reasoning"] = reasoning
                 else:
                     body["reasoning"] = {"enabled": False}
-            elif requested == "none":
-                body["reasoning"] = {"enabled": False}
             else:
-                mapped = _EFFORT_ALIASES.get(requested)
+                mapped = _normalise_effort(requested, body["model"])
                 if mapped is None:
                     # unknown effort string: coerce to the family's floor and
                     # say so — silent rewriting made client intent invisible
                     log.warning("unknown reasoning_effort %r; using 'medium'",
                                 requested)
                     mapped = "medium"
-                body["reasoning_effort"] = mapped
+                if mapped == "none":
+                    body["reasoning"] = {"enabled": False}
+                else:
+                    body["reasoning_effort"] = mapped
     else:
-        body["reasoning_effort"] = (_client_effort(payload) or "low")
+        # Captured 2026-09-24 (space-bunny-alpha, mimo-v2.6-flash,
+        # deepseek-v4.1-flash, muse-spark): token limit + reasoning_effort side
+        # by side; the "None" picker level is {"reasoning": {"enabled": false}}.
+        reasoning = payload.get("reasoning")
+        if isinstance(reasoning, dict) and not reasoning.get("effort"):
+            body["reasoning"] = reasoning
+        else:
+            requested = _client_effort(payload)
+            if requested is None:
+                if isinstance(reasoning, dict):
+                    body["reasoning"] = reasoning
+                else:
+                    body["reasoning_effort"] = "low"     # captured default
+            else:
+                mapped = _normalise_effort(requested, body["model"])
+                if mapped is None:
+                    log.warning("unknown reasoning_effort %r; using 'low'",
+                                requested)
+                    mapped = "low"
+                if mapped == "none":
+                    body["reasoning"] = {"enabled": False}
+                else:
+                    body["reasoning_effort"] = mapped
         if variant == "openai-nextgen":
             body["max_completion_tokens"] = max_tokens
         else:

@@ -48,7 +48,8 @@ CAPTURED_MODEL_VARIANTS: dict[str, Variant] = {
 # every non-anthropic family observed so far uses the default shape.
 KNOWN_MODEL_VARIANTS: dict[str, Variant] = {
     # free section, 2026-09-24
-    "cline-free/gemini-3.8-flash": "default",
+    # gemini-3.8-flash captured 2026-09-24: reasoning family (no token key)
+    "cline-free/gemini-3.8-flash": "reasoning",
     "cline-free/mimo-v2.6-flash": "default",
     "stealth/space-bunny-alpha": "default",
     "cline-free/deepseek-v4.1-flash": "default",
@@ -108,6 +109,8 @@ VARIANT_RULES: list[tuple[re.Pattern[str], Variant]] = [
     # anchored: an unanchored substring match handed the reasoning variant to
     # any id merely containing "kimi-k3" (e.g. x/kimi-k3-old)
     (re.compile(r"(?:^|/)kimi-k3(?:$|[-.:])", re.I), "reasoning"),
+    # gemini-3.8-flash: same family shape (no token key), captured 2026-09-24
+    (re.compile(r"(?:^|/)gemini-3\.8-flash(?:$|[-.:])", re.I), "reasoning"),
 ]
 
 
