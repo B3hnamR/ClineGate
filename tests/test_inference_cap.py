@@ -30,10 +30,18 @@ CAP_MESSAGE = ("Error 429: Daily free limit reached on model zai/glm-5.3-flash. 
 
 
 def test_catalog_free_models_are_free():
-    """zai/glm-5.3-flash is in the catalogue's free section but has no
-    cline-free/ prefix and no :free suffix — it must still count as free."""
-    assert Registry.is_free("zai/glm-5.3-flash") is True
-    assert Registry.is_free("z-ai/glm-5.3-flash") is True
+    """stealth/space-bunny-alpha is in the live catalogue's free section but has
+    no cline-free/ prefix and no :free suffix — it must still count as free."""
+    assert Registry.is_free("stealth/space-bunny-alpha") is True
+    assert Registry.is_free("cline-free/gemini-3.8-flash") is True
+    assert Registry.is_free("cline-free/mimo-v2.6-flash") is True
+
+
+def test_removed_free_models_are_no_longer_free():
+    """zai/glm-5.3-flash left the free section on 2026-09-24 (now usage-billed):
+    a 402 on it must retire the paid lane instead of looking like a daily cap."""
+    assert Registry.is_free("zai/glm-5.3-flash") is False
+    assert Registry.is_free("z-ai/glm-5.3-flash") is False
 
 
 def test_free_classification_unchanged_for_other_shapes():
@@ -203,10 +211,11 @@ from cline_gateway.registry import model_lane     # noqa: E402
 
 
 def test_three_lanes():
-    assert model_lane("cline-free/solar-pro4") == "free"
-    assert model_lane("zai/glm-5.3-flash") == "free"          # catalogue-free
+    assert model_lane("cline-free/deepseek-v4.1-flash") == "free"
+    assert model_lane("stealth/space-bunny-alpha") == "free"   # catalogue-free
     assert model_lane("cline-pass/glm-5.3") == "plan"
     assert model_lane("cline-cloud/kimi-k3") == "plan"
+    assert model_lane("zai/glm-5.3-flash") == "usage"          # left the free section
     assert model_lane("openai/gpt-6-astra") == "usage"
     assert model_lane("anthropic/claude-opus-5") == "usage"
 
@@ -239,20 +248,22 @@ def test_free_model_ignores_balance_entirely():
     a = Account(id="a", access_token="t")
     a.paid_exhausted = True
     a.has_plan = False
-    for m in ("cline-free/solar-pro4", "cline-free/deepseek-v4.1-flash",
-              "zai/glm-5.3-flash"):
+    for m in ("cline-free/deepseek-v4.1-flash", "stealth/space-bunny-alpha",
+              "cline-free/gemini-3.8-flash"):
         assert account_model_status(a, m)["status"] == AVAILABLE, m
+    # a former free id that left the free section is correctly NOT available
+    assert account_model_status(a, "zai/glm-5.3-flash")["status"] == NO_CREDIT
 
 
 def test_free_cap_is_per_model_per_account():
     a = Account(id="a", access_token="t")
     a.paid_exhausted = True
-    a.model_caps["zai/glm-5.3-flash"] = __import__("time").time() + 3600
-    a.model_cap_info["zai/glm-5.3-flash"] = {"code": "INFERENCE_CAP_ERROR",
-                                             "release_at": "x"}
-    assert account_model_status(a, "zai/glm-5.3-flash")["status"] == CAPPED
+    a.model_caps["cline-free/gemini-3.8-flash"] = __import__("time").time() + 3600
+    a.model_cap_info["cline-free/gemini-3.8-flash"] = {"code": "INFERENCE_CAP_ERROR",
+                                                       "release_at": "x"}
+    assert account_model_status(a, "cline-free/gemini-3.8-flash")["status"] == CAPPED
     # every other free model still works on the same account
-    assert account_model_status(a, "cline-free/solar-pro4")["status"] == AVAILABLE
+    assert account_model_status(a, "cline-free/deepseek-v4.1-flash")["status"] == AVAILABLE
 
 
 def test_availability_reports_partial_and_next_release():

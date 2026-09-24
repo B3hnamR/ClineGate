@@ -47,6 +47,13 @@ CAPTURED_MODEL_VARIANTS: dict[str, Variant] = {
 # Not present in the Phase-1 chat capture, so their variant is inferred:
 # every non-anthropic family observed so far uses the default shape.
 KNOWN_MODEL_VARIANTS: dict[str, Variant] = {
+    # free section, 2026-09-24
+    "cline-free/gemini-3.8-flash": "default",
+    "cline-free/mimo-v2.6-flash": "default",
+    "stealth/space-bunny-alpha": "default",
+    "cline-free/deepseek-v4.1-flash": "default",
+    "cline-free/muse-spark-1.3-contributor": "default",
+    # cline-pass
     "cline-pass/deepseek-v4-flash": "default",
     "cline-pass/qwen3.8-max": "default",
     "cline-pass/glm-5.2": "default",
@@ -61,6 +68,9 @@ KNOWN_MODEL_VARIANTS: dict[str, Variant] = {
     "cline-pass/qwen3.7-plus": "default",
     "cline-pass/mimo-v2.5-pro": "default",
     "cline-pass/mimo-v2.5": "default",
+    "cline-pass/mimo-v2.6-flash": "default",
+    "cline-pass/mimo-v2.6-pro": "default",
+    "cline-pass/muse-spark-1.3-contributor": "default",
     # same model family as the captured cline-free/kimi-k3: the request shape is
     # chosen by family, not by lane
     "cline-pass/kimi-k3": "reasoning",
@@ -73,17 +83,20 @@ KNOWN_MODEL_VARIANTS: dict[str, Variant] = {
 # free-model classification
 # --------------------------------------------------------------------------- #
 
-# From model-catalog.json -> `free`. The catalogue spells one id "z-ai/..." while
-# the client sends "zai/..." — both must classify as free, because a daily cap on
-# a free model is not a credit exhaustion and must not retire the paid lane.
+# From the live recommended-models endpoint (`free` section, 2026-09-24):
+#   cline-free/gemini-3.8-flash, stealth/space-bunny-alpha,
+#   cline-free/mimo-v2.6-flash, cline-free/deepseek-v4.1-flash,
+#   cline-free/muse-spark-1.3-contributor
+# `stealth/space-bunny-alpha` is the one free id without the cline-free prefix,
+# so it must be listed explicitly or a daily cap on it would look like a paid
+# 402. (Removed by Cline: cline-free/kimi-k3, cline-free/solar-pro4,
+# zai/glm-5.3-flash — kimi-k3 lives on as cline-pass/kimi-k3.)
 CATALOG_FREE_MODELS: frozenset[str] = frozenset({
+    "cline-free/gemini-3.8-flash",
+    "cline-free/mimo-v2.6-flash",
     "cline-free/deepseek-v4.1-flash",
     "cline-free/muse-spark-1.3-contributor",
-    "cline-free/solar-pro4",
-    "cline-free/kimi-k3",
-    "poolside/laguna-s-2.1:free",
-    "z-ai/glm-5.3-flash",
-    "zai/glm-5.3-flash",
+    "stealth/space-bunny-alpha",
 })
 
 # Pattern rules applied when a model is not in the tables above.

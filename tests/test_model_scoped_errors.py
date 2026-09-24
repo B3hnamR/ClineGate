@@ -93,11 +93,13 @@ async def test_cap_seconds_default_for_entitlement_message():
 
 def test_free_classification_covers_catalog_ids():
     from cline_gateway.registry import Registry
-    # both spellings: catalogue says z-ai/, the client sends zai/
-    assert Registry.is_free("zai/glm-5.3-flash")
-    assert Registry.is_free("z-ai/glm-5.3-flash")
+    # live free section 2026-09-24: stealth/ has no cline-free prefix
+    assert Registry.is_free("stealth/space-bunny-alpha")
+    assert Registry.is_free("cline-free/gemini-3.8-flash")
     # cline-pass models are NOT free (they need a pass/plan)
     assert not Registry.is_free("cline-pass/glm-5.3")
+    # zai/glm-5.3-flash left the free section (now usage-billed)
+    assert not Registry.is_free("zai/glm-5.3-flash")
 
 
 @pytest.mark.asyncio
