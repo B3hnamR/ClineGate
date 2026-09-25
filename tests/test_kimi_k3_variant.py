@@ -43,9 +43,11 @@ def test_kimi_k3_is_a_free_lane_model():
     assert model_lane("cline-cloud/kimi-k3") == "plan"
 
 
-def test_kimi_k3_is_advertised_in_the_catalogue():
+def test_removed_free_kimi_is_not_advertised_in_the_catalogue():
     ids = {m["id"] for m in Registry().catalogue()}
-    assert "cline-free/kimi-k3" in ids
+    assert "cline-free/kimi-k3" not in ids
+    assert "cline-pass/kimi-k3" in ids
+    assert "cline-cloud/kimi-k3" in ids
 
 
 def test_reasoning_variant_is_registered():

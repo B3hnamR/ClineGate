@@ -74,7 +74,9 @@ curl http://127.0.0.1:8787/v1/chat/completions `
 - **Both dialects** — `/v1/chat/completions` (OpenAI) and `/v1/messages`
   (Anthropic), streaming and non-streaming.
 - **Live dashboard** — accounts, per-model availability, stats, logs,
-  settings, and a setup guide.
+  settings, and a setup guide. The Models page and `/v1/models` refresh from
+  Cline's public curated model feed every five minutes while used. A bundled
+  snapshot remains available if the feed cannot be reached.
 - **Self-updating** — a 🔔 appears when a new release is out; one click
   downloads, swaps, and relaunches.
 

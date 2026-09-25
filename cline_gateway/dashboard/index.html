@@ -645,13 +645,32 @@ const App = (() => {
     cache.mdlSort = {key, dir: (cur.key === key ? -cur.dir : 1)};
     renderModels($("#view"));
   }
+  function filterModels(input){
+    cache.mdlQ = input.value;
+    const q = input.value.toLowerCase();
+    document.querySelectorAll("#models-body tr").forEach(row => {
+      const name = row.querySelector("b.mono")?.textContent || "";
+      row.style.display = name.toLowerCase().includes(q) ? "" : "none";
+    });
+  }
+  async function syncModels(){
+    try {
+      const status = await api("/admin/models/catalog/refresh", {method:"POST"});
+      toast(status.error ? "Catalog sync failed; showing the last known list"
+                         : "Model catalog synced", status.error ? "warn" : "ok");
+      await renderModels($("#view"));
+    } catch (e) { toast(e.message, "err"); }
+  }
   async function renderModels(v){
     const data = await api("/admin/models/availability");
-    const q = (document.getElementById("mdl-q")?.value || "").toLowerCase();
+    if (curTab !== "models") return;
+    const previousInput = document.getElementById("mdl-q");
+    const focused = document.activeElement === previousInput;
+    const selection = focused ? [previousInput.selectionStart, previousInput.selectionEnd] : null;
+    const q = previousInput?.value ?? cache.mdlQ ?? "";
     const sort = cache.mdlSort || {key:"rank", dir:1};
     cache.mdlSort = sort;
-    let models = data.models.filter(m =>
-      !q || m.model.toLowerCase().includes(q));
+    let models = data.models;
     const keyFns = {
       rank:  m => [STATUS_RANK[m.overall] ?? 9, m.model],
       model: m => m.model,
@@ -671,14 +690,21 @@ const App = (() => {
       const arr = on ? (sort.dir === 1 ? "▲" : "▼") : "";
       return `<th class="sortable" onclick="App.sortModels('${key}')">${label}<span class="arr">${arr}</span></th>`;
     };
+    const catalog = data.catalog || {};
+    const source = catalog.source === "live" ? "Live Cline catalog" : "Bundled snapshot";
+    const synced = catalog.updated_at
+      ? " · synced " + new Date(catalog.updated_at * 1000).toLocaleTimeString() : "";
+    const syncError = catalog.error ? " · sync failed (" + catalog.error + ")" : "";
     let html = `<div class="toolbar">
       <h3 style="margin:0">${data.summary.fully_available}/${data.summary.total_models} fully available</h3>
+      <span style="color:var(--muted); font-size:12px">${esc(source + synced + syncError)}</span>
       <div class="grow"></div>
+      <button class="btn btn-quiet btn-sm" onclick="App.syncModels()">Sync models</button>
       <input type="text" id="mdl-q" placeholder="Filter models…" style="max-width:230px"
-             oninput="App.renderModels()"></div>`;
+             oninput="App.filterModels(this)"></div>`;
     html += `<div class="tbl-wrap"><table class="tbl-compact"><thead><tr>
       ${th("Model","model")}${th("Lane","lane")}${th("On accounts","ratio")}
-      ${th("Status","rank")}${th("Next free","next")}</tr></thead><tbody>`;
+      ${th("Status","rank")}${th("Next free","next")}</tr></thead><tbody id="models-body">`;
     for (const m of models) {
       html += `<tr>
         <td><details><summary><span class="caret">▶</span>
@@ -696,11 +722,17 @@ const App = (() => {
     }
     html += `</tbody></table></div>
       <p style="color:var(--faint); font-size:12px; margin-top:10px">
-        Click a model for its per-account breakdown. Free models are capped per
-        model per account; paid models need balance &gt; 0; plan models need a
-        subscription. Sorted by availability — click a column to re-sort.</p>`;
+        Click a model for its per-account breakdown. Availability is inferred
+        from account state, balance and known caps; it is not a model probe.
+        Sorted by availability — click a column to re-sort.</p>`;
     v.innerHTML = html;
-    if (cache.mdlQ) { const e = document.getElementById("mdl-q"); if (e) e.value = cache.mdlQ; }
+    const input = document.getElementById("mdl-q");
+    input.value = q;
+    filterModels(input);
+    if (focused) {
+      input.focus();
+      input.setSelectionRange(selection[0], selection[1]);
+    }
   }
 
   /* ------------ tab: server ------------ */
@@ -991,7 +1023,7 @@ api_key: ${esc(s.admin_key)}   # or any client key</p>
   }
 
   return {start, login, tab, refresh, renderAccounts, renderModels, renderLogs,
-          sortModels, doImport, doReload, acct, acctRemove, saveSettings,
+          sortModels, filterModels, syncModels, doImport, doReload, acct, acctRemove, saveSettings,
           regenKeys, clearLogs, toggleServer, copy,
           showUpdate, hideUpdate, skipUpdate, doUpdate,
           loginStart, loginCancel};

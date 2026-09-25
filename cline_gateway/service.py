@@ -18,7 +18,7 @@ from typing import Any, AsyncIterator
 
 from .config import Config
 from .pool import Account, PoolManager
-from .registry import Registry, model_lane
+from .registry import Registry
 from .store import JsonlCapture, Store
 from .tokens import TokenManager
 from .translate_anthropic import AnthropicStreamTranslator, extract_openai_usage
@@ -152,14 +152,14 @@ class ChatService:
         chain = list(dict.fromkeys(
             self.registry.resolve(candidate, dialect) for candidate in fallback.chain))
         selected = self.registry.resolve(selected, dialect)
-        if not (fallback.enabled and Registry.is_free(selected)
+        if not (fallback.enabled and self.registry.is_free_model(selected)
                 and selected in chain):
             return await self._open_model(payload, variant, dialect=dialect,
                                           client_key=client_key, model=model)
 
         attempted: list[str] = []
         for candidate in chain[chain.index(selected):]:
-            if not Registry.is_free(candidate):
+            if not self.registry.is_free_model(candidate):
                 continue
             candidate_payload = dict(payload)
             candidate_payload["model"] = candidate
@@ -236,11 +236,11 @@ class ChatService:
 
         # Credit-free models (cline-free/*, *:free) do not consume Cline Credits,
         # so a paid-lane 402 must not take the account out of rotation for them.
-        is_free = Registry.is_free(payload.get("model", ""))
+        is_free = self.registry.is_free_model(payload.get("model", ""))
         # Lane-aware routing: plan models (cline-pass/*, cline-cloud/*) are gated
         # by a subscription, not by the credit balance — an account whose usage
         # balance is exhausted must still be routable for them.
-        require_paid = model_lane(payload.get("model", "")) == "usage"
+        require_paid = self.registry.lane_for(payload.get("model", "")) == "usage"
 
         held: Account | None = None      # reservation owned by this call
         transferred = False              # True once the caller takes it over

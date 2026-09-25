@@ -204,9 +204,11 @@ async def model_availability(request: Request, key: str = Depends(admin_key)) ->
     from .availability import build_matrix
 
     state = get_state(request)
+    if state.catalog is not None:
+        await state.catalog.refresh_if_due()
     accounts = await state.pool.all()
 
-    # models the registry knows about, minus the client-facing aliases
+    # Curated feed models, minus the client-facing aliases.
     models: list[str] = []
     seen = set()
     for entry in state.registry.catalogue():
@@ -217,4 +219,17 @@ async def model_availability(request: Request, key: str = Depends(admin_key)) ->
             seen.add(mid)
             models.append(mid)
 
-    return build_matrix(accounts, models)
+    result = build_matrix(accounts, models, free_models=state.registry.free_models)
+    result["catalog"] = state.catalog.status if state.catalog is not None else {
+        "source": "snapshot", "updated_at": None, "error": None}
+    return result
+
+
+@router.post("/models/catalog/refresh")
+async def refresh_model_catalog(request: Request,
+                                key: str = Depends(admin_key)) -> dict:
+    """Force a new feed fetch when the user presses Sync models."""
+    state = get_state(request)
+    if state.catalog is None:
+        raise HTTPException(status_code=503, detail="model catalogue unavailable")
+    return await state.catalog.refresh_if_due(force=True)

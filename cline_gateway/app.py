@@ -19,6 +19,7 @@ from .api_health import router as health_router
 from .api_openai import router as openai_router
 from .config import Config, load_config
 from .logbuffer import LogBuffer
+from .model_catalog import ModelCatalog
 from .pool import PoolManager, load_accounts
 from .ratelimit import RateLimiter
 from .registry import Registry
@@ -51,6 +52,7 @@ async def lifespan(app: FastAPI):
         default_anthropic=cfg.models.default_anthropic,
         probe_unknown=cfg.models.probe_unknown,
     )
+    catalog = ModelCatalog(cfg.upstream.base_url, registry)
 
     try:
         accounts = load_accounts(cfg.accounts)
@@ -72,6 +74,7 @@ async def lifespan(app: FastAPI):
         cfg=cfg, pool=pool, tokens=tokens, client=client,
         registry=registry, store=store, capture=capture, service=service,
         limiter=RateLimiter(),
+        catalog=catalog,
     )
     app.state.app_state.log_buffer = log_buffer
 
@@ -116,6 +119,7 @@ async def lifespan(app: FastAPI):
                 pass
         await tokens.aclose()
         await client.aclose()
+        await catalog.aclose()
         await updater.aclose()
         store.close()
 

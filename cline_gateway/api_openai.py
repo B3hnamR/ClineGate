@@ -41,6 +41,8 @@ def _valid_messages(messages: Any) -> bool:
 @router.get("/v1/models")
 async def list_models(request: Request, key: str = Depends(client_key)) -> dict:
     state = get_state(request)
+    if state.catalog is not None:
+        await state.catalog.refresh_if_due()
     return {"object": "list", "data": state.registry.catalogue()}
 
 

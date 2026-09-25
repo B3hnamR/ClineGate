@@ -27,3 +27,4 @@ class AppState:
     service: ChatService
     limiter: RateLimiter
     updater: Any = None          # updater.UpdateChecker, wired in lifespan
+    catalog: Any = None          # model_catalog.ModelCatalog, wired in lifespan

@@ -15,7 +15,8 @@ The variant map is derived directly from the Phase-1 capture
 from __future__ import annotations
 
 import re
-from typing import Literal
+from collections.abc import Collection
+from typing import Any, Literal
 
 Variant = Literal["default", "anthropic", "openai-nextgen", "reasoning"]
 
@@ -80,25 +81,67 @@ KNOWN_MODEL_VARIANTS: dict[str, Variant] = {
     "cline-cloud/glm-5.2": "default",
 }
 
-# --------------------------------------------------------------------------- #
-# free-model classification
-# --------------------------------------------------------------------------- #
+# The public recommended-models feed is the source for the displayed catalogue.
+# This captured 2026-09-24 snapshot is used until the first successful fetch and
+# during an outage. Historical model ids above remain useful for request variant
+# selection, but must not bring removed models back into the Models page.
+FALLBACK_CATALOG_GROUPS: dict[str, tuple[str, ...]] = {
+    "recommended": (
+        "spacexai/grok-4.7", "openai/gpt-6-astra", "moonshotai/kimi-k3",
+        "anthropic/claude-opus-5",
+    ),
+    "free": (
+        "cline-free/gemini-3.8-flash", "stealth/space-bunny-alpha",
+        "cline-free/mimo-v2.6-flash", "cline-free/deepseek-v4.1-flash",
+        "cline-free/muse-spark-1.3-contributor",
+    ),
+    "clinePass": (
+        "cline-pass/mimo-v2.6-flash", "cline-pass/mimo-v2.6-pro",
+        "cline-pass/glm-5.3", "cline-pass/qwen3.8-max",
+        "cline-pass/deepseek-v4-pro", "cline-pass/deepseek-v4.1-flash",
+        "cline-pass/muse-spark-1.3-contributor", "cline-pass/kimi-k3",
+        "cline-pass/glm-5.3-flash", "cline-pass/qwen3.7-plus",
+        "cline-pass/minimax-m3", "cline-pass/qwen3.7-max",
+        "cline-pass/mimo-v2.5-pro", "cline-pass/mimo-v2.5",
+    ),
+    "clineCloud": (
+        "cline-cloud/glm-5.3", "cline-cloud/deepseek-v4.1-flash",
+        "cline-cloud/kimi-k3",
+    ),
+}
+CATALOG_GROUPS = tuple(FALLBACK_CATALOG_GROUPS)
+CATALOG_FREE_MODELS: frozenset[str] = frozenset(FALLBACK_CATALOG_GROUPS["free"])
 
-# From the live recommended-models endpoint (`free` section, 2026-09-24):
-#   cline-free/gemini-3.8-flash, stealth/space-bunny-alpha,
-#   cline-free/mimo-v2.6-flash, cline-free/deepseek-v4.1-flash,
-#   cline-free/muse-spark-1.3-contributor
-# `stealth/space-bunny-alpha` is the one free id without the cline-free prefix,
-# so it must be listed explicitly or a daily cap on it would look like a paid
-# 402. (Removed by Cline: cline-free/kimi-k3, cline-free/solar-pro4,
-# zai/glm-5.3-flash — kimi-k3 lives on as cline-pass/kimi-k3.)
-CATALOG_FREE_MODELS: frozenset[str] = frozenset({
-    "cline-free/gemini-3.8-flash",
-    "cline-free/mimo-v2.6-flash",
-    "cline-free/deepseek-v4.1-flash",
-    "cline-free/muse-spark-1.3-contributor",
-    "stealth/space-bunny-alpha",
-})
+
+def _parse_catalogue(payload: dict[str, Any]) -> tuple[tuple[dict, ...], frozenset[str]]:
+    """Validate the feed before replacing the entire visible catalogue."""
+    if not isinstance(payload, dict) or any(
+            not isinstance(payload.get(group), list) for group in CATALOG_GROUPS):
+        raise ValueError("unexpected recommended-models response shape")
+    entries: dict[str, dict] = {}
+    free_ids: set[str] = set()
+    for group in CATALOG_GROUPS:
+        for item in payload[group]:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                raise ValueError("invalid recommended-models entry")
+            model_id = item["id"].strip()
+            if not model_id:
+                raise ValueError("empty recommended-models id")
+            if group == "free":
+                free_ids.add(model_id)
+            if model_id not in entries:
+                entries[model_id] = {
+                    "id": model_id,
+                    "name": item.get("name") if isinstance(item.get("name"), str) else model_id,
+                    "description": (item.get("description") if isinstance(
+                        item.get("description"), str) else ""),
+                    "tags": ([tag for tag in item["tags"] if isinstance(tag, str)]
+                             if isinstance(item.get("tags"), list) else []),
+                    "catalog_group": group,
+                }
+    if not entries:
+        raise ValueError("recommended-models response is empty")
+    return tuple(entries.values()), frozenset(free_ids)
 
 # Pattern rules applied when a model is not in the tables above.
 VARIANT_RULES: list[tuple[re.Pattern[str], Variant]] = [
@@ -126,6 +169,27 @@ class Registry:
         self.default_anthropic = default_anthropic
         self.probe_unknown = probe_unknown
         self._learned: dict[str, Variant] = {}
+        snapshot = {
+            group: [{"id": model_id} for model_id in ids]
+            for group, ids in FALLBACK_CATALOG_GROUPS.items()
+        }
+        self._catalog_entries, self._catalog_free_ids = _parse_catalogue(snapshot)
+
+    @property
+    def free_models(self) -> frozenset[str]:
+        return self._catalog_free_ids
+
+    def use_live_catalogue(self, payload: dict[str, Any]) -> None:
+        """Replace the visible models atomically after validating the full feed."""
+        entries, free_ids = _parse_catalogue(payload)
+        self._catalog_entries = entries
+        self._catalog_free_ids = free_ids
+
+    def lane_for(self, upstream_model: str) -> str:
+        return model_lane(upstream_model, free_models=self.free_models)
+
+    def is_free_model(self, upstream_model: str) -> bool:
+        return self.lane_for(upstream_model) == "free"
 
     # ------------------------------------------------------------------ #
 
@@ -172,15 +236,7 @@ class Registry:
 
     @staticmethod
     def is_free(upstream_model: str) -> bool:
-        """Credit-free models.
-
-        True for the `cline-free/*` prefix, any `:free` suffix, and every id in
-        the catalogue's free section (which includes `zai/glm-5.3-flash` — a
-        model with a *daily cap* rather than a credit cost).
-
-        Why this matters: a 402 on the paid lane retires the account's paid lane,
-        and a 429 daily-cap on a free model must not do anything of the sort.
-        """
+        """Offline credit-free classification; instances use the live free set."""
         m = upstream_model or ""
         return (m.lower().startswith("cline-free/")
                 or m.lower().endswith(":free")
@@ -189,31 +245,31 @@ class Registry:
     # ------------------------------------------------------------------ #
 
     def catalogue(self) -> list[dict]:
-        """Model list for GET /v1/models (and /v1/models for anthropic clients)."""
-        all_variants: dict[str, Variant] = {}
-        all_variants.update(KNOWN_MODEL_VARIANTS)
-        all_variants.update(CAPTURED_MODEL_VARIANTS)
-        all_variants.update(self._learned)
+        """Current curated model list, plus explicitly configured aliases."""
         out = []
-        for model_id, variant in sorted(all_variants.items()):
+        for item in self._catalog_entries:
+            model_id = item["id"]
             captured = model_id in CAPTURED_MODEL_VARIANTS
             out.append({
+                **item,
                 "id": model_id,
                 "object": "model",
                 "owned_by": "cline",
-                "cline_variant": variant,
+                "cline_variant": self.variant_for(model_id),
                 "captured": captured,
-                "is_free": Registry.is_free(model_id),
+                "is_free": self.is_free_model(model_id),
             })
         # expose configured aliases as first-class ids too
         for alias, target in sorted(self.aliases.items()):
+            if any(entry["id"] == alias for entry in out):
+                continue
             out.append({
                 "id": alias,
                 "object": "model",
                 "owned_by": "cline",
                 "cline_variant": self.variant_for(target),
                 "alias_of": target,
-                "is_free": Registry.is_free(target),
+                "is_free": self.is_free_model(target),
             })
         return out
 
@@ -226,7 +282,7 @@ class Registry:
 PLAN_PREFIXES = ("cline-pass/", "cline-cloud/")
 
 
-def model_lane(model: str) -> str:
+def model_lane(model: str, free_models: Collection[str] | None = None) -> str:
     """Which gate applies to this model?
 
       "free"  - credit-free, capped per model per account (daily window)
@@ -234,7 +290,9 @@ def model_lane(model: str) -> str:
       "usage" - billed against the account's credit balance
     """
     m = model or ""
-    if Registry.is_free(m):
+    if (Registry.is_free(m) if free_models is None else
+            (m.lower().startswith("cline-free/") or m.lower().endswith(":free")
+             or m in free_models)):
         return "free"
     if any(m.lower().startswith(pref) for pref in PLAN_PREFIXES):
         return "plan"

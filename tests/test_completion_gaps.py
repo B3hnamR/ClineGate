@@ -95,9 +95,10 @@ def test_knows_distinguishes_catalogued_from_unknown():
 
 def test_catalogue_includes_catalogued_families():
     cat = {m["id"]: m for m in Registry().catalogue()}
-    assert "cline-pass/glm-5.2" in cat
+    assert "cline-pass/glm-5.3" in cat
     assert "cline-cloud/kimi-k3" in cat
-    assert cat["cline-pass/glm-5.2"]["captured"] is False
+    assert "cline-pass/glm-5.2" not in cat
+    assert cat["cline-pass/glm-5.3"]["captured"] is False
     assert cat["anthropic/claude-opus-5"]["captured"] is True
 
 

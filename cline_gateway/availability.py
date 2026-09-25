@@ -13,10 +13,10 @@ So availability is a matrix, not a single flag. This module builds it.
 from __future__ import annotations
 
 import time
-from typing import Iterable
+from typing import Collection, Iterable
 
 from .pool import Account, AccountState
-from .registry import Registry, model_lane
+from .registry import model_lane
 from .upstream import is_entitlement_code
 
 # status values, worst-last so callers can rank them
@@ -34,7 +34,8 @@ _STATUS_RANK = {
 }
 
 
-def account_model_status(account: Account, model: str) -> dict:
+def account_model_status(account: Account, model: str,
+                         free_models: Collection[str] | None = None) -> dict:
     """Why can (or can't) this account serve this model right now?"""
     if account.state is AccountState.DEAD:
         return {"status": UNAVAILABLE, "reason": "account is dead"}
@@ -55,7 +56,7 @@ def account_model_status(account: Account, model: str) -> dict:
             "release_in_s": int(max(until - time.time(), 0)),
         }
 
-    lane = model_lane(model)
+    lane = model_lane(model, free_models)
 
     if lane == "plan":
         # subscription-gated: a plan record is what matters, not balance
@@ -83,11 +84,12 @@ def account_model_status(account: Account, model: str) -> dict:
     return {"status": AVAILABLE, "reason": reason}
 
 
-def model_availability(accounts: Iterable[Account], model: str) -> dict:
+def model_availability(accounts: Iterable[Account], model: str,
+                       free_models: Collection[str] | None = None) -> dict:
     """Per-account breakdown for one model, plus the pool-wide verdict."""
     rows = []
     for account in accounts:
-        row = account_model_status(account, model)
+        row = account_model_status(account, model, free_models)
         row["account_id"] = account.id
         row["email"] = account.email
         rows.append(row)
@@ -104,8 +106,8 @@ def model_availability(accounts: Iterable[Account], model: str) -> dict:
 
     return {
         "model": model,
-        "is_free": Registry.is_free(model),
-        "lane": model_lane(model),
+        "is_free": model_lane(model, free_models) == "free",
+        "lane": model_lane(model, free_models),
         "available_on": len(serving),
         "total_accounts": len(rows),
         "overall": overall,
@@ -118,10 +120,11 @@ def model_availability(accounts: Iterable[Account], model: str) -> dict:
     }
 
 
-def build_matrix(accounts: Iterable[Account], models: Iterable[str]) -> dict:
+def build_matrix(accounts: Iterable[Account], models: Iterable[str],
+                 free_models: Collection[str] | None = None) -> dict:
     """Full availability snapshot for the pool."""
     accounts = list(accounts)
-    entries = [model_availability(accounts, m) for m in models]
+    entries = [model_availability(accounts, m, free_models) for m in models]
 
     return {
         "generated_at": time.time(),
