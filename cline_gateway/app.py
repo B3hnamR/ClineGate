@@ -8,8 +8,8 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__
 from .api_admin import router as admin_router
@@ -127,13 +127,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     app = FastAPI(title="Cline Gateway", version=__version__, lifespan=lifespan)
     app.state.cfg = cfg
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # No CORS middleware on purpose: the dashboard is served same-origin and
+    # every API client is a non-browser tool. `allow_origins=["*"]` let any
+    # visited website read /dash (which embeds the admin key on loopback) and
+    # then drive the admin API — a remote origin controlling a local tool.
 
     # dual-dialect surfaces
     app.include_router(openai_router)        # /v1/chat/completions, /v1/completions, /v1/models
@@ -141,6 +138,27 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     app.include_router(admin_router)         # /admin/*
     app.include_router(dash_router)          # /dash + /admin/dash/*
     app.include_router(health_router)        # /health, /ready, /metrics
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request, exc):
+        # Auth/rate-limit failures raised in deps.py must reach /v1 clients in
+        # their own dialect, not FastAPI's {"detail": ...} shape. Admin and
+        # dashboard routes keep the plain detail (the dashboard reads it).
+        status = exc.status_code
+        detail = str(exc.detail)
+        headers = getattr(exc, "headers", None)
+        if request.url.path.startswith("/v1/messages"):
+            code = {401: "invalid_api_key", 403: "permission_denied",
+                    429: "rate_limit_exceeded"}.get(status, "invalid_request_error")
+            return JSONResponse(status_code=status, headers=headers,
+                                content=anthropic_error(status, code, detail))
+        if request.url.path.startswith("/v1/"):
+            code = {401: "invalid_api_key", 403: "permission_denied",
+                    429: "rate_limit_exceeded"}.get(status, "invalid_request_error")
+            return JSONResponse(status_code=status, headers=headers,
+                                content=openai_error(status, code, detail))
+        return JSONResponse(status_code=status, headers=headers,
+                            content={"detail": exc.detail})
 
     @app.exception_handler(Exception)
     async def unhandled(request, exc):  # pragma: no cover

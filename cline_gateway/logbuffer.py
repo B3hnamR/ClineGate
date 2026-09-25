@@ -37,8 +37,16 @@ class LogBuffer(logging.Handler):
         A deque snapshot is atomic enough for a log view — no lock needed.
         """
         floors = {"": -1, "ALL": -1, "DEBUG": 10, "INFO": 20,
-                  "WARNING": 30, "ERROR": 40}
+                  "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
         floor = floors.get((level or "").upper(), -1)
-        rows = [r for r in list(self.records)
-                if logging.getLevelName(r["level"]) >= floor]
+        rows = []
+        for r in list(self.records):
+            # getLevelName returns a *string* ("Level TRACE") for custom level
+            # names — comparing that to an int raised TypeError and 500'd the
+            # dashboard log view. Unknown names rank below every floor.
+            numeric = logging.getLevelName(r["level"])
+            if not isinstance(numeric, int):
+                numeric = logging.NOTSET
+            if numeric >= floor:
+                rows.append(r)
         return rows[-limit:]

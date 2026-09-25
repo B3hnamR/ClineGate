@@ -204,14 +204,22 @@ async def _legacy_completion_stream(source: Any, model: str) -> Any:
             legacy["usage"] = chunk["usage"]
         return f"data: {json.dumps(legacy, ensure_ascii=False)}\n\n".encode("utf-8")
 
-    async for raw in source:
-        buf += raw.decode("utf-8", "replace")
-        *lines, buf = buf.split("\n")
-        for line in lines:
+    try:
+        async for raw in source:
+            buf += raw.decode("utf-8", "replace")
+            *lines, buf = buf.split("\n")
+            for line in lines:
+                out = _translate(line)
+                if out is not None:
+                    yield out
+        for line in buf.splitlines():        # flush any final partial line
             out = _translate(line)
             if out is not None:
                 yield out
-    for line in buf.splitlines():            # flush any final partial line
-        out = _translate(line)
-        if out is not None:
-            yield out
+    finally:
+        # an abandoned legacy stream must close the inner generator, not wait
+        # for GC: the inner generator owns the upstream connection and the
+        # pool reservation
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            await aclose()

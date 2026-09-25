@@ -62,12 +62,30 @@ def _read_config_raw(path: Path) -> dict:
 
 
 def _config_path(state) -> Path | None:
-    """Where the running config lives; None when not derivable."""
+    """The exact config file the process loaded; None when not derivable."""
+    file = getattr(state.cfg, "_config_file", None)
+    if file:
+        return Path(file)
+    # manual Config objects without a recorded file: fall back to the
+    # folder-based guess
     root = getattr(state.cfg, "_root", None)
     if root:
-        return root / "config.yaml"
+        return Path(root) / "config.yaml"
     p = Path("config.yaml")
     return p if p.is_file() else None
+
+
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _request_is_loopback(request: Request) -> bool:
+    """True when the browser reached us under a loopback name.
+
+    CORS does not protect /dash from DNS rebinding: an attacker hostname that
+    resolves to 127.0.0.1 is same-origin in the browser, so the request's Host
+    is the only tell. Never hand the admin key to a foreign Host.
+    """
+    return (request.url.hostname or "").strip().lower() in _LOOPBACK_HOSTS
 
 
 @router.get("/dash", response_class=HTMLResponse)
@@ -78,11 +96,13 @@ def dashboard(request: Request) -> HTMLResponse:
     html = index.read_text(encoding="utf-8")
     # First-launch convenience: hand the page its own admin key so the login
     # screen does not gate the local tool (single-user, single-machine — the
-    # Server tab displays the same key anyway). Loopback-only: never inject
-    # when the server is reachable from other machines.
+    # Server tab displays the same key anyway). Both the bind address and the
+    # request's own Host must be loopback: a DNS-rebinding page is same-origin
+    # and would otherwise read the key straight out of this response.
     try:
         cfg = get_state(request).cfg
-        if (cfg.server.host or "").strip() in ("127.0.0.1", "localhost", "::1"):
+        if ((cfg.server.host or "").strip() in _LOOPBACK_HOSTS
+                and _request_is_loopback(request)):
             marker = 'sessionStorage.getItem("gw-admin-key") || ""'
             injected = ('sessionStorage.getItem("gw-admin-key") || '
                         + json.dumps(cfg.server.admin_key))
@@ -182,7 +202,9 @@ async def dash_import(request: Request, key: str = Depends(admin_key)) -> dict:
                             detail=f"import helper unavailable: {exc}") from exc
     try:
         out_dir = Path(state.cfg.accounts.dir)
-        result = import_from_cline_config(output_dir=out_dir)
+        # file scanning + snapshot writes; keep them off the event loop
+        result = await asyncio.to_thread(import_from_cline_config,
+                                         output_dir=out_dir)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -267,7 +289,8 @@ async def dash_cline_status(request: Request, key: str = Depends(admin_key)) -> 
     """Installed/running/logged-in status of the desktop Cline app."""
     get_state(request)
     from .cline_detect import detect_cline
-    status = detect_cline()
+    # tasklist + registry reads can block for seconds; never on the event loop
+    status = await asyncio.to_thread(detect_cline)
     chip, kind = status.as_chip()
     return {
         "installed": status.installed,
@@ -331,7 +354,7 @@ async def update_download(request: Request, key: str = Depends(admin_key)) -> di
         raise HTTPException(status_code=400, detail="no update available")
     from . import updater as updater_mod
     try:
-        path = await updater_mod.download_update(url)
+        path = await updater_mod.download_update(url, status.get("checksum_url"))
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

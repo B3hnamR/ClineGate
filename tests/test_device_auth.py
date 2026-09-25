@@ -177,6 +177,7 @@ def test_routes_registered_and_gated():
 
     cfg = load_config()
     cfg.update.enabled = False
+    cfg.pool.balance_poll_seconds = 0   # hermetic: no live balance sweeps
     app = create_app(cfg)
     with TestClient(app) as client:
         for path in ("/admin/dash/auth/login/start",

@@ -121,6 +121,7 @@ class Config(BaseModel):
 
     # resolved absolute paths (filled by load())
     _root: Path | None = None
+    _config_file: Path | None = None
 
     def resolved(self, base: Path | None = None) -> "Config":
         """Expand ~ and resolve relative paths against the config file's folder.
@@ -140,6 +141,11 @@ class Config(BaseModel):
         self.accounts.pool_file = fix(self.accounts.pool_file)
         self.logging.capture_dir = fix(self.logging.capture_dir)
         self.store.sqlite_path = fix(self.store.sqlite_path)
+        # the folder is the base for relative paths; `_config_file` (set by
+        # load_config) is the exact file the dashboard Settings tab writes back
+        # to — cwd-relative fallbacks edited the wrong config.yaml when the exe
+        # was launched from elsewhere
+        self._root = base
         return self
 
     def ensure_dirs(self) -> None:
@@ -180,15 +186,18 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     candidates.append(Path(__file__).resolve().parent.parent / "config.yaml")
 
     base: Path | None = None
+    config_file: Path | None = None
     for c in candidates:
         if c and c.is_file():
             with open(c, encoding="utf-8") as fh:
                 loaded = yaml.safe_load(fh) or {}
             data = _deep_merge(data, loaded)
-            base = Path(c).resolve().parent
+            config_file = Path(c).resolve()
+            base = config_file.parent
             break
 
     cfg = Config(**data)
+    cfg._config_file = config_file
 
     # environment overrides (CLINE_GATEWAY_<SECTION>__<FIELD>)
     env = {k: v for k, v in os.environ.items() if k.startswith("CLINE_GATEWAY_")}

@@ -138,7 +138,8 @@ async def reload_pool(request: Request, key: str = Depends(admin_key)) -> dict:
     """Re-read the credential source (e.g. providers.json after a desktop login)."""
     state = get_state(request)
     try:
-        accounts = load_accounts(state.cfg.accounts)
+        # providers.json can be large and AV-scanned; keep it off the loop
+        accounts = await asyncio.to_thread(load_accounts, state.cfg.accounts)
     except Exception as exc:
         # no str(exc): it can embed absolute paths and file-content snippets
         log.warning("pool reload failed from %s: %s",
@@ -182,7 +183,7 @@ async def reload_pool(request: Request, key: str = Depends(admin_key)) -> dict:
 async def persist_pool(request: Request, key: str = Depends(admin_key)) -> dict:
     state = get_state(request)
     accounts = await state.pool.all()
-    persist_pool_snapshot(state.cfg, accounts)
+    await asyncio.to_thread(persist_pool_snapshot, state.cfg, accounts)
     return {"persisted": len(accounts), "path": state.cfg.accounts.pool_file}
 
 

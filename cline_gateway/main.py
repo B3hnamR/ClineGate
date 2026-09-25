@@ -12,18 +12,24 @@ from cline_gateway.app import create_app
 from cline_gateway.config import load_config
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cline-gateway",
                                      description="OpenAI/Anthropic-compatible proxy "
                                                  "over Cline's LLM API")
     parser.add_argument("--config", "-c", default=None, help="path to config.yaml")
-    parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--reload", action="store_true")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     cfg = load_config(args.config)
-    host = args.host or cfg.server.host
+    # No --host flag on purpose: the gateway is local-only, and a CLI host
+    # override bypassed the loopback check that gates admin-key injection in
+    # the dashboard (config server.host is the single source of truth).
+    host = cfg.server.host
     port = args.port or cfg.server.port
 
     if args.reload:

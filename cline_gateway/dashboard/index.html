@@ -338,8 +338,8 @@ const App = (() => {
     clearTimeout(t._t); t._t = setTimeout(() => t.style.display = "none", 4500);
   }
   const $ = sel => document.querySelector(sel);
-  const esc = s => String(s ?? "").replace(/[&<>"]/g,
-    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const esc = s => String(s ?? "").replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const fmtUsd = micro => (micro === null || micro === undefined) ? "—"
     : "$" + (micro / 1e6).toFixed(2);
   const fmtSecs = s => { if (s === null || s === undefined) return "—";

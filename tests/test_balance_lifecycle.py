@@ -401,6 +401,7 @@ async def test_balance_endpoint_applies_threshold_not_just_fetches(tmp_path):
 
     cfg = load_config()
     cfg.update.enabled = False
+    cfg.pool.balance_poll_seconds = 0   # hermetic: no live balance sweeps
     cfg.accounts.source = "accounts_dir"
     cfg.accounts.dir = str(tmp_path / "accounts")
     app = create_app(cfg)

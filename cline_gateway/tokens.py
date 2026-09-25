@@ -1,9 +1,10 @@
 """Token lifecycle: proactive refresh, single-flight per account, persistence.
 
-The exact `/api/v1/auth/refresh` response shape was NOT captured (see PLAN §9), so
-this module is deliberately defensive: it tries the documented request shapes and
-parses several plausible response envelopes. If refresh fails it falls back to
-re-reading the source config (the desktop app may have rotated the token itself).
+The `/api/v1/auth/refresh` response shape was captured (2026-09-16);
+`tests/test_token_refresh.py` pins it. Refreshing is deliberately defensive: on
+failure it falls back to re-reading the source config (the desktop app may have
+rotated the token itself). A refresh manages tokens only — account state
+(COOLING / EXHAUSTED / DEAD) belongs to the pool and is never changed here.
 """
 
 from __future__ import annotations
@@ -152,9 +153,18 @@ class TokenManager:
 
         `force=True` refreshes even when the local expiry looks fine — used after
         an upstream 401, where the token was rejected (revoked early) while our
-        local `expires_at` still claims it is valid.
+        local `expires_at` still claims it is valid. Concurrent forced refreshes
+        for the same rejected token are deduplicated (one POST, not one each).
         """
+        before = account.access_token
         async with self._lock_for(account.id):
+            # a concurrent forced refresh may have already replaced the token
+            # this caller was rejected with; re-POSTing for the same rejected
+            # token is a refresh stampede (one POST per concurrent 401)
+            if (force and account.access_token != before
+                    and account.access_token
+                    and account.expires_in() > 60):
+                return True
             # another coroutine may have refreshed while we waited
             if (not force
                     and account.expires_in() > self.cfg.pool.refresh_lead_seconds
@@ -217,9 +227,9 @@ class TokenManager:
             account.refresh_token = parsed["refresh_token"]
         if parsed.get("expires_at"):
             account.expires_at = parsed["expires_at"]
-        account.state = AccountState.READY
-        account.error_count = 0
-        account.last_error = ""
+        # Deliberately NOT touching state/error_count/last_error: a successful
+        # token refresh must not un-cool an edge-blocked account or revive an
+        # exhausted one. Pool transitions own those fields.
 
     async def _reload_from_source(self, account: Account) -> bool:
         """Re-read the credential source; the desktop app may have rotated it."""
@@ -235,7 +245,7 @@ class TokenManager:
                 account.access_token = f.access_token
                 account.refresh_token = f.refresh_token or account.refresh_token
                 account.expires_at = f.expires_at
-                account.state = AccountState.READY
+                # tokens only; pool state is not a token concern (see _apply)
                 log.info("reloaded token for %s from %s", account.id, f.source)
                 return True
         return False

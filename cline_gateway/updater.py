@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import hashlib
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -33,6 +34,7 @@ API = "https://api.github.com/repos/{repo}/releases/latest"
 UA = "ClineGate-updater"           # GitHub rejects requests without a UA
 EXE_NAME = "ClineGateway.exe"
 NEW_EXE_NAME = "ClineGateway.new.exe"
+CHECKSUM_ASSET_NAME = "checksums.sha256"
 
 _VERSION_RE = re.compile(r"(\d+)")
 
@@ -102,15 +104,18 @@ class UpdateChecker:
 
         tag = rel.get("tag_name") or ""
         asset = pick_asset(rel.get("assets") or [])
+        checksum_asset = pick_asset(rel.get("assets") or [], CHECKSUM_ASSET_NAME)
         newer = is_newer(tag, self.current)
         self._last = {
             "checked_at": time.time(),
             "current": self.current,
             "latest": tag.lstrip("v"),
-            "update_available": bool(newer and asset),
+            "update_available": bool(newer and asset and checksum_asset),
             "release_url": rel.get("html_url"),
             "download_url": asset["browser_download_url"] if asset else None,
             "download_size": asset.get("size") if asset else None,
+            "checksum_url": (checksum_asset["browser_download_url"]
+                             if checksum_asset else None),
             "notes": (rel.get("body") or "")[:4000],
             "published_at": rel.get("published_at"),
         }
@@ -127,17 +132,51 @@ def exe_dir() -> Path:
     return Path(sys.executable).resolve().parent
 
 
-async def download_update(url: str, client: httpx.AsyncClient | None = None) -> Path:
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 16), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+async def _expected_sha256(http: httpx.AsyncClient, checksum_url: str) -> str:
+    """The published SHA-256 for the exe, from the release's checksums file."""
+    try:
+        resp = await http.get(checksum_url)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"could not fetch {CHECKSUM_ASSET_NAME}: {exc.__class__.__name__}"
+            "; refusing update") from exc
+    for line in resp.text.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[-1].lstrip("*") == EXE_NAME:
+            return parts[0]
+    raise RuntimeError(
+        f"{CHECKSUM_ASSET_NAME} lists no entry for {EXE_NAME}; refusing update")
+
+
+async def download_update(url: str, checksum_url: str | None,
+                          client: httpx.AsyncClient | None = None) -> Path:
     """Download the new exe next to the running one. Frozen builds only.
 
-    The URL must be the github.com asset URL from the release we fetched —
-    never a caller-supplied address.
+    The URLs must be the github.com asset URLs from the release we fetched —
+    never caller-supplied addresses. The download is refused unless the
+    published checksums.sha256 lists a matching SHA-256: without that check a
+    tampered release (or a truncated download) would execute as the next build.
     """
     if not getattr(sys, "frozen", False):
         raise RuntimeError("self-update is only available in the exe build")
-    host = (urlparse(url).hostname or "").lower()
-    if not (host == "github.com" or host.endswith(".github.com")):
-        raise RuntimeError(f"refusing download from non-GitHub host: {host}")
+    if not checksum_url:
+        raise RuntimeError(
+            f"release has no {CHECKSUM_ASSET_NAME}; refusing to update "
+            "(download manually from the release page if you trust it)")
+    for candidate, what in ((url, "exe"), (checksum_url, "checksum")):
+        host = (urlparse(candidate).hostname or "").lower()
+        if not (host == "github.com" or host.endswith(".github.com")):
+            raise RuntimeError(
+                f"refusing {what} download from non-GitHub host: {host}")
     target = exe_dir() / NEW_EXE_NAME
     own = client is None
     http = client or httpx.AsyncClient(
@@ -149,15 +188,20 @@ async def download_update(url: str, client: httpx.AsyncClient | None = None) -> 
             with open(target, "wb") as fh:
                 async for chunk in resp.aiter_bytes(1 << 16):
                     fh.write(chunk)
+        if target.stat().st_size < 1_000_000:
+            raise RuntimeError("downloaded file is implausibly small; discarding it")
+        expected = await _expected_sha256(http, checksum_url)
+        actual = _sha256_file(target)
+        if actual.lower() != expected.lower():
+            raise RuntimeError(
+                f"checksum mismatch for {EXE_NAME}: expected {expected}, "
+                f"got {actual}; discarding the download")
     except Exception:
         target.unlink(missing_ok=True)
         raise
     finally:
         if own:
             await http.aclose()
-    if target.stat().st_size < 1_000_000:
-        target.unlink(missing_ok=True)
-        raise RuntimeError("downloaded file is implausibly small; discarding it")
     return target
 
 
@@ -178,19 +222,23 @@ def apply_update(new_exe: Path) -> None:
     bat = Path(tempfile.gettempdir()) / "clinegate_update.bat"
     bat.write_text(
         "@echo off\r\n"
-        f"set \"SRC={new_exe}\"\r\n"
-        f"set \"TGT={current}\"\r\n"
         ":wait\r\n"
         f"tasklist /FI \"PID eq {pid}\" /NH 2>nul | find /I \"{current.name}\" >nul\r\n"
         "if %errorlevel%==0 (timeout /t 1 /nobreak >nul & goto wait)\r\n"
         "rem one extra beat for the bootloader parent to release the file\r\n"
         "timeout /t 2 /nobreak >nul\r\n"
-        "move /y %SRC% %TGT% >nul\r\n"
-        "start \"\" %TGT%\r\n"
+        # paths travel via the environment: quoting survives spaces, and the
+        # environment is Unicode-safe where an ASCII .bat embedding is not
+        'move /y "%CLINEGATE_SRC%" "%CLINEGATE_TGT%" >nul\r\n'
+        'start "" "%CLINEGATE_TGT%"\r\n'
         "del \"%~f0\"\r\n",
         encoding="ascii")
+    env = dict(os.environ)
+    env["CLINEGATE_SRC"] = str(new_exe)
+    env["CLINEGATE_TGT"] = str(current)
     subprocess.Popen(
         ["cmd", "/c", str(bat)],
+        env=env,
         creationflags=(subprocess.DETACHED_PROCESS
                        | subprocess.CREATE_NEW_PROCESS_GROUP
                        | getattr(subprocess, "CREATE_NO_WINDOW", 0)),

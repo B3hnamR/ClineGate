@@ -16,6 +16,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Tag matches app version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          $line = Select-String -Path cline_gateway\__init__.py -Pattern '__version__ = "([^"]+)"'
+          if (-not $line) { throw "no __version__ found in cline_gateway/__init__.py" }
+          $ver = $line.Matches[0].Groups[1].Value
+          if ($tag -ne $ver) {
+            throw "tag v$tag does not match __version__ $ver - bump cline_gateway/__init__.py (and tools/exe_version.txt) before tagging"
+          }
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"

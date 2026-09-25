@@ -588,6 +588,7 @@ def _app(tmp_path, accounts_payload: str):
     from cline_gateway.app import create_app
     cfg = Config()
     cfg.server.require_client_key = False
+    cfg.pool.balance_poll_seconds = 0   # hermetic: no live balance sweeps
     cfg.accounts.source = "pool_file"
     cfg.accounts.pool_file = str(tmp_path / "pool.json")
     (tmp_path / "pool.json").write_text(accounts_payload, encoding="utf-8")

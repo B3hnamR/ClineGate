@@ -242,249 +242,273 @@ class ChatService:
         # balance is exhausted must still be routable for them.
         require_paid = model_lane(payload.get("model", "")) == "usage"
 
-        for _ in range(max_attempts):
-            account = await self.pool.acquire(
-                tried, require_paid=require_paid, model=upstream_model,
-                wait_seconds=(self.cfg.pool.acquire_wait_seconds
-                              if not tried else 0.0))
-            if account is None and require_paid:
-                # every account is paid-exhausted: try anyway so the client gets
-                # the upstream 402 rather than a generic "no accounts"
-                account = await self.pool.acquire(tried, require_paid=False,
-                                                  model=upstream_model,
-                                                  wait_seconds=0.0)
-            if account is None and tried:
-                # nothing untried left (e.g. a single-account pool) — allow reuse
-                account = await self.pool.acquire(set(), require_paid=require_paid,
-                                                  model=upstream_model,
-                                                  wait_seconds=0.0)
-            if account is None:
-                # If the only obstacle is a parked model, answer with the real
-                # upstream reason instead of a generic "no usable account".
-                # Prefer the last classified error over the parked record: the
-                # parked message may be empty, and the chain handler keys on the
-                # code — normalise it so a cap/entitlement is always recognised
-                # as such (never surfaces as a raw 429 that stalls the chain).
-                if (last_error and last_error[1] and (
-                        self._is_model_cap(
-                            {"code": last_error[1], "message": last_error[2]},
-                            True)
-                        or is_entitlement_code(last_error[1]))):
+        held: Account | None = None      # reservation owned by this call
+        transferred = False              # True once the caller takes it over
+        try:
+            for _ in range(max_attempts):
+                account = await self.pool.acquire(
+                    tried, require_paid=require_paid, model=upstream_model,
+                    wait_seconds=(self.cfg.pool.acquire_wait_seconds
+                                  if not tried else 0.0))
+                if account is None and require_paid:
+                    # every account is paid-exhausted: try anyway so the client gets
+                    # the upstream 402 rather than a generic "no accounts"
+                    account = await self.pool.acquire(tried, require_paid=False,
+                                                      model=upstream_model,
+                                                      wait_seconds=0.0)
+                if account is None and tried:
+                    # nothing untried left (e.g. a single-account pool) — allow reuse
+                    account = await self.pool.acquire(set(), require_paid=require_paid,
+                                                      model=upstream_model,
+                                                      wait_seconds=0.0)
+                if account is None:
+                    # If the only obstacle is a parked model, answer with the real
+                    # upstream reason instead of a generic "no usable account".
+                    # Prefer the last classified error over the parked record: the
+                    # parked message may be empty, and the chain handler keys on the
+                    # code — normalise it so a cap/entitlement is always recognised
+                    # as such (never surfaces as a raw 429 that stalls the chain).
+                    if (last_error and last_error[1] and (
+                            self._is_model_cap(
+                                {"code": last_error[1], "message": last_error[2]},
+                                True)
+                            or is_entitlement_code(last_error[1]))):
+                        parked = await self.pool.unavailable_reason(upstream_model)
+                        self._record_failure(failure, client_key, dialect, model,
+                                             variant, upstream_model)
+                        raise UpstreamFailure(
+                            last_error[0], last_error[1],
+                            (last_error[2]
+                             or (parked or {}).get("message")
+                             or f"model {upstream_model} is temporarily unavailable"),
+                            release_at=(parked or {}).get("release_at"),
+                            release_in_s=(parked or {}).get("release_in_s"))
                     parked = await self.pool.unavailable_reason(upstream_model)
-                    self._record_failure(failure, client_key, dialect, model,
-                                         variant, upstream_model)
-                    raise UpstreamFailure(
-                        last_error[0], last_error[1],
-                        (last_error[2]
-                         or (parked or {}).get("message")
-                         or f"model {upstream_model} is temporarily unavailable"),
-                        release_at=(parked or {}).get("release_at"),
-                        release_in_s=(parked or {}).get("release_in_s"))
-                parked = await self.pool.unavailable_reason(upstream_model)
-                if parked:
-                    self._record_failure(failure, client_key, dialect, model,
-                                         variant, upstream_model)
-                    raise UpstreamFailure(
-                        parked["status"], parked["code"],
-                        parked["message"] or f"model {upstream_model} is "
-                                             f"temporarily unavailable",
-                        release_at=parked.get("release_at"),
-                        release_in_s=parked.get("release_in_s"))
-                break
+                    if parked:
+                        self._record_failure(failure, client_key, dialect, model,
+                                             variant, upstream_model)
+                        raise UpstreamFailure(
+                            parked["status"], parked["code"],
+                            parked["message"] or f"model {upstream_model} is "
+                                                 f"temporarily unavailable",
+                            release_at=parked.get("release_at"),
+                            release_in_s=parked.get("release_in_s"))
+                    break
 
-            if account.needs_refresh(self.cfg.pool.refresh_lead_seconds):
-                await self.tokens.refresh(account)
-                # Unusable (refresh failed and nothing reloadable): rotate away
-                # instead of sending a known-expired token upstream.
-                if not account.access_token or account.expires_in() <= 0:
-                    await self.pool.release(account)
-                    tried.add(account.id)
-                    continue
+                held = account
 
-            body = self._build(payload, variant)
-            try:
-                resp = await self._send(account, body)
-            except TransportError as exc:
-                await self.pool.release(account)
-                tried.add(account.id)
-                last_error = (502, "transport_error", str(exc))
-                await asyncio.sleep(self._retry_pause(attempt))
-                attempt += 1
-                continue
+                if account.needs_refresh(self.cfg.pool.refresh_lead_seconds):
+                    await self.tokens.refresh(account)
+                    # Unusable (refresh failed and nothing reloadable): rotate away
+                    # instead of sending a known-expired token upstream.
+                    if not account.access_token or account.expires_in() <= 0:
+                        await self.pool.release(account)
+                        held = None
+                        tried.add(account.id)
+                        continue
 
-            headers = build_headers(account.access_token,
-                                    self.cfg.upstream.fingerprint)
-
-            if resp.status_code == 200:
-                if probing:
-                    self.registry.learn(upstream_model, variant)
-                return account, headers, body, resp, variant
-
-            raw = await resp.aread()
-            resp_headers = dict(resp.headers)
-            no_retry = str(resp.headers.get("no-retry", "")).lower() == "true"
-            await resp.aclose()
-            await self.pool.release(account)
-            tried.add(account.id)
-
-            kind = classify(resp.status_code, raw)
-            info = parse_upstream_error(resp.status_code, raw)
-            last_error = (resp.status_code, info["code"], info["message"])
-            failure = (account, headers, body, resp.status_code, resp_headers,
-                       raw.decode("utf-8", "replace"), (time.time() - started) * 1000)
-
-            if kind is ErrorKind.INSUFFICIENT_CREDITS:
-                if is_free:
-                    if info["code"] == "insufficient_credits":
-                        # a credit error on a credit-free model is unexpected:
-                        # treat it as transient rather than retiring the lane
-                        log.warning("free-lane 402 from account %s (%s)",
-                                    account.id, info["code"])
-                        await self.pool.cool(account, reason="free_lane_402")
-                    else:
-                        # a non-credit 402 on a free model is most likely the
-                        # (still-uncaptured) free-tier throttle: cool longer
-                        log.warning("free-lane %s from account %s (%s)",
-                                    resp.status_code, account.id, info["code"])
-                        await self.pool.cool(
-                            account,
-                            seconds=self.cfg.pool.cooldown_seconds * 2,
-                            reason=f"free_lane_{info['code']}")
-                else:
-                    log.warning("paid lane exhausted on account %s (%s)",
-                                account.id, info["code"])
-                    await self.pool.retire(account, reason=info["code"],
-                                           paid_only=True)
-                continue
-
-            if kind is ErrorKind.ENTITLEMENT:
-                # 403 ENTITLEMENT_ERROR: this account is not subscribed to this
-                # model's plan. Model-scoped — park the model, leave the account
-                # alone. A plan does not change minute to minute, so park longer.
-                seconds = self._parse_cap_seconds(info["message"])
-                if seconds <= 3600:
-                    seconds = ENTITLEMENT_PARK_SECONDS
-                await self.pool.cap_model(account, upstream_model, seconds,
-                                          reason=info["code"],
-                                          message=info["message"])
-                log.warning("entitlement: %s unavailable on account %s (%s)",
-                            upstream_model, account.id, info["code"])
-                self._record_failure(failure, client_key, dialect, model,
-                                     variant, upstream_model)
-                failure = None       # recorded; do not record it twice on exit
-                last_error = (resp.status_code, info["code"], info["message"])
-                # Model-scoped, per account: another account may be entitled to
-                # this very model, so keep rotating. If every account is parked,
-                # the next acquire() finds nothing and `unavailable_reason`
-                # raises with this model's own reason + release time.
-                continue
-
-            if kind is ErrorKind.UNAUTHORIZED:
-                # force=True: the upstream rejected a token our local expiry
-                # still likes (revoked early). Without it, refresh() would
-                # return True without calling the API and we would resend the
-                # exact rejected token.
-                ok = await self.tokens.refresh(account, force=True)
-                if not ok:
-                    # a single refresh failure can be transient (network); only
-                    # retire the account after repeated failures
-                    if account.error_count >= 3:
-                        await self.pool.kill(account, reason="refresh_failed")
-                    else:
-                        await self.pool.cool(account, reason="refresh_failed")
-                    continue
-                # retry the same account once with the fresh token. The original
-                # reservation was released above (before classification), so
-                # take it back first — otherwise the final release in
-                # complete()/stream_from() would decrement another request's
-                # in-flight slot.
-                tried.discard(account.id)
-                await self.pool.reacquire(account)
+                body = self._build(payload, variant)
                 try:
                     resp = await self._send(account, body)
                 except TransportError as exc:
-                    await self.pool.cool(account, reason="transport after refresh")
                     await self.pool.release(account)
+                    held = None
+                    tried.add(account.id)
                     last_error = (502, "transport_error", str(exc))
+                    await asyncio.sleep(self._retry_pause(attempt))
+                    attempt += 1
                     continue
+
+                headers = build_headers(account.access_token,
+                                        self.cfg.upstream.fingerprint)
+
                 if resp.status_code == 200:
                     if probing:
                         self.registry.learn(upstream_model, variant)
-                    return account, build_headers(account.access_token,
-                                                  self.cfg.upstream.fingerprint), \
-                           body, resp, variant
+                    transferred = True
+                    return account, headers, body, resp, variant
+
                 raw = await resp.aread()
+                resp_headers = dict(resp.headers)
+                no_retry = str(resp.headers.get("no-retry", "")).lower() == "true"
                 await resp.aclose()
+                await self.pool.release(account)
+                held = None
+                tried.add(account.id)
+
+                kind = classify(resp.status_code, raw)
                 info = parse_upstream_error(resp.status_code, raw)
                 last_error = (resp.status_code, info["code"], info["message"])
-                # still 401 with a freshly refreshed token: do not kill the
-                # account on a transient upstream auth blip — cool and move on
-                await self.pool.cool(account, reason=info["code"])
-                await self.pool.release(account)
-                continue
+                failure = (account, headers, body, resp.status_code, resp_headers,
+                           raw.decode("utf-8", "replace"), (time.time() - started) * 1000)
 
-            if kind is ErrorKind.RATE_LIMITED:
-                if self._is_model_cap(info, no_retry):
-                    # A per-model daily cap (INFERENCE_CAP_ERROR on a free model).
-                    # The account is fine and its other models still work, so this
-                    # must NOT cool the account — only park the model.
+                if kind is ErrorKind.INSUFFICIENT_CREDITS:
+                    if is_free:
+                        if info["code"] == "insufficient_credits":
+                            # a credit error on a credit-free model is unexpected:
+                            # treat it as transient rather than retiring the lane
+                            log.warning("free-lane 402 from account %s (%s)",
+                                        account.id, info["code"])
+                            await self.pool.cool(account, reason="free_lane_402")
+                        else:
+                            # a non-credit 402 on a free model is most likely the
+                            # (still-uncaptured) free-tier throttle: cool longer
+                            log.warning("free-lane %s from account %s (%s)",
+                                        resp.status_code, account.id, info["code"])
+                            await self.pool.cool(
+                                account,
+                                seconds=self.cfg.pool.cooldown_seconds * 2,
+                                reason=f"free_lane_{info['code']}")
+                    else:
+                        log.warning("paid lane exhausted on account %s (%s)",
+                                    account.id, info["code"])
+                        await self.pool.retire(account, reason=info["code"],
+                                               paid_only=True)
+                    continue
+
+                if kind is ErrorKind.ENTITLEMENT:
+                    # 403 ENTITLEMENT_ERROR: this account is not subscribed to this
+                    # model's plan. Model-scoped — park the model, leave the account
+                    # alone. A plan does not change minute to minute, so park longer.
                     seconds = self._parse_cap_seconds(info["message"])
+                    if seconds <= 3600:
+                        seconds = ENTITLEMENT_PARK_SECONDS
                     await self.pool.cap_model(account, upstream_model, seconds,
                                               reason=info["code"],
                                               message=info["message"])
-                    log.warning("model cap: %s parked on account %s for %.0fs (%s)",
-                                upstream_model, account.id, seconds, info["code"])
+                    log.warning("entitlement: %s unavailable on account %s (%s)",
+                                upstream_model, account.id, info["code"])
                     self._record_failure(failure, client_key, dialect, model,
                                          variant, upstream_model)
-                    failure = None   # recorded; do not record it twice on exit
+                    failure = None       # recorded; do not record it twice on exit
                     last_error = (resp.status_code, info["code"], info["message"])
-                    # Model-scoped, per account: keep rotating — another account
-                    # may still have quota for this model. When all are parked,
-                    # `unavailable_reason` raises with the parsed release window.
+                    # Model-scoped, per account: another account may be entitled to
+                    # this very model, so keep rotating. If every account is parked,
+                    # the next acquire() finds nothing and `unavailable_reason`
+                    # raises with this model's own reason + release time.
                     continue
-                await self.pool.cool(account, reason=info["code"])
-                continue
 
-            if kind is ErrorKind.EDGE_BLOCK:
-                # A 403 served as HTML by the CDN/edge, for every model. It is
-                # infrastructure, not the API, and not the account's fault - so it
-                # must not be surfaced as "you are forbidden", and it must not
-                # retire or kill anything. Back off, then let the client retry.
-                log.warning("edge block (403) on account %s: %s", account.id,
-                            edge_block_message(raw))
-                await self.pool.cool(account,
-                                     seconds=self.cfg.pool.cooldown_seconds * 4,
-                                     reason="edge_block")
-                self._record_failure(failure, client_key, dialect, model,
-                                     variant, upstream_model)
-                raise UpstreamFailure(503, "EDGE_BLOCK",
-                                      edge_block_message(raw))
-
-            if kind is ErrorKind.SERVER:
-                # upstream-side fault: retry, and only cool when we have a backup
-                other_ready = [a for a in await self.pool.all()
-                               if a.is_ready() and a.id != account.id]
-                if other_ready:
+                if kind is ErrorKind.UNAUTHORIZED:
+                    # force=True: the upstream rejected a token our local expiry
+                    # still likes (revoked early). Without it, refresh() would
+                    # return True without calling the API and we would resend the
+                    # exact rejected token.
+                    ok = await self.tokens.refresh(account, force=True)
+                    if not ok:
+                        # a single refresh failure can be transient (network); only
+                        # retire the account after repeated failures
+                        if account.error_count >= 3:
+                            await self.pool.kill(account, reason="refresh_failed")
+                        else:
+                            await self.pool.cool(account, reason="refresh_failed")
+                        continue
+                    # retry the same account once with the fresh token. The original
+                    # reservation was released above (before classification), so
+                    # take it back first — otherwise the final release in
+                    # complete()/stream_from() would decrement another request's
+                    # in-flight slot.
+                    tried.discard(account.id)
+                    await self.pool.reacquire(account)
+                    held = account
+                    try:
+                        resp = await self._send(account, body)
+                    except TransportError as exc:
+                        await self.pool.cool(account, reason="transport after refresh")
+                        await self.pool.release(account)
+                        held = None
+                        last_error = (502, "transport_error", str(exc))
+                        continue
+                    if resp.status_code == 200:
+                        if probing:
+                            self.registry.learn(upstream_model, variant)
+                        transferred = True
+                        return account, build_headers(account.access_token,
+                                                      self.cfg.upstream.fingerprint), \
+                               body, resp, variant
+                    raw = await resp.aread()
+                    await resp.aclose()
+                    info = parse_upstream_error(resp.status_code, raw)
+                    last_error = (resp.status_code, info["code"], info["message"])
+                    # still 401 with a freshly refreshed token: do not kill the
+                    # account on a transient upstream auth blip — cool and move on
                     await self.pool.cool(account, reason=info["code"])
-                await asyncio.sleep(self._retry_pause(attempt))
-                attempt += 1
-                continue
+                    await self.pool.release(account)
+                    held = None
+                    continue
 
-            # client error — surface to the client, never rotate for this.
-            # An unknown model earns exactly one alternate-variant probe retry,
-            # unless the upstream marked the response no-retry.
-            if probing and not no_retry and probe_i < len(probe_order) - 1:
-                probe_i += 1
-                variant = probe_order[probe_i]
-                log.info("probe: %s rejected variant %s (%s), retrying with %s",
-                         upstream_model, probe_order[probe_i - 1],
-                         info["code"], variant)
-                tried.discard(account.id)
-                continue
-            self._record_failure(failure, client_key, dialect, model, variant,
-                                 upstream_model)
-            raise UpstreamFailure(resp.status_code, info["code"], info["message"])
+                if kind is ErrorKind.RATE_LIMITED:
+                    if self._is_model_cap(info, no_retry):
+                        # A per-model daily cap (INFERENCE_CAP_ERROR on a free model).
+                        # The account is fine and its other models still work, so this
+                        # must NOT cool the account — only park the model.
+                        seconds = self._parse_cap_seconds(info["message"])
+                        await self.pool.cap_model(account, upstream_model, seconds,
+                                                  reason=info["code"],
+                                                  message=info["message"])
+                        log.warning("model cap: %s parked on account %s for %.0fs (%s)",
+                                    upstream_model, account.id, seconds, info["code"])
+                        self._record_failure(failure, client_key, dialect, model,
+                                             variant, upstream_model)
+                        failure = None   # recorded; do not record it twice on exit
+                        last_error = (resp.status_code, info["code"], info["message"])
+                        # Model-scoped, per account: keep rotating — another account
+                        # may still have quota for this model. When all are parked,
+                        # `unavailable_reason` raises with the parsed release window.
+                        continue
+                    await self.pool.cool(account, reason=info["code"])
+                    continue
 
+                if kind is ErrorKind.EDGE_BLOCK:
+                    # A 403 served as HTML by the CDN/edge, for every model. It is
+                    # infrastructure, not the API, and not the account's fault - so it
+                    # must not be surfaced as "you are forbidden", and it must not
+                    # retire or kill anything. Back off, then let the client retry.
+                    log.warning("edge block (403) on account %s: %s", account.id,
+                                edge_block_message(raw))
+                    await self.pool.cool(account,
+                                         seconds=self.cfg.pool.cooldown_seconds * 4,
+                                         reason="edge_block")
+                    self._record_failure(failure, client_key, dialect, model,
+                                         variant, upstream_model)
+                    raise UpstreamFailure(503, "EDGE_BLOCK",
+                                          edge_block_message(raw))
+
+                if kind is ErrorKind.SERVER:
+                    # upstream-side fault: retry, and only cool when we have a backup
+                    other_ready = [a for a in await self.pool.all()
+                                   if a.is_ready() and a.id != account.id]
+                    if other_ready:
+                        await self.pool.cool(account, reason=info["code"])
+                    await asyncio.sleep(self._retry_pause(attempt))
+                    attempt += 1
+                    continue
+
+                # client error — surface to the client, never rotate for this.
+                # An unknown model earns exactly one alternate-variant probe retry,
+                # unless the upstream marked the response no-retry.
+                if probing and not no_retry and probe_i < len(probe_order) - 1:
+                    probe_i += 1
+                    variant = probe_order[probe_i]
+                    log.info("probe: %s rejected variant %s (%s), retrying with %s",
+                             upstream_model, probe_order[probe_i - 1],
+                             info["code"], variant)
+                    tried.discard(account.id)
+                    continue
+                self._record_failure(failure, client_key, dialect, model, variant,
+                                     upstream_model)
+                raise UpstreamFailure(resp.status_code, info["code"], info["message"])
+
+        finally:
+            if held is not None and not transferred:
+                # An exception or cancellation escaped while a reservation
+                # was still held (e.g. a mid-read httpx failure, client
+                # disconnect). Release on a shielded task: a cancelled
+                # caller must not swallow the release itself.
+                try:
+                    await asyncio.shield(self.pool.release(held))
+                except Exception:
+                    log.exception("failed to release leaked reservation for %s",
+                                  held.id)
         status, code, message = last_error or (
             503, "no_accounts_available", "no usable Cline account in the pool")
         self._record_failure(failure, client_key, dialect, model, variant,
@@ -579,22 +603,36 @@ class ChatService:
         account, headers, body, resp, variant = await self._open(
             payload, variant, dialect=dialect, client_key=client_key, model=model)
         try:
-            raw = await resp.aread()
+            try:
+                raw = await resp.aread()
+            except httpx.HTTPError as exc:
+                # a mid-read failure is an upstream fault: surface it as the
+                # dialect-shaped 502 the streaming path already uses instead of
+                # letting a bare httpx exception reach the generic 500 handler
+                raise UpstreamFailure(
+                    502, "upstream_read_error",
+                    f"upstream read failed: {exc.__class__.__name__}") from exc
             upstream_headers = resp.headers
         finally:
-            await resp.aclose()
-            await self.pool.release(account)
+            # shielded: a cancelled or failing close must not skip the release
+            await asyncio.shield(self._close_and_release(resp, account))
 
         duration_ms = (time.time() - started) * 1000
-        await self.pool.on_success(account)
         # the upstream body is SSE even for a "non-stream" client (we always
         # stream upstream and aggregate locally), so usage lives in the final
         # SSE frame, not in a JSON document — parse it as SSE, not json.loads
         text = raw.decode("utf-8", "replace")
+        # a 200 that carries an upstream error frame is not a success: the
+        # routes answer 502 for this shape, so the pool ledger must agree
+        # (mirrors the streaming path's stream_ok)
+        ok = not self._any_error_event(text)
+        if ok:
+            await self.pool.on_success(account)
         usage = self._usage_from_sse(text)
         try:
             await asyncio.to_thread(
-                self._record, account, headers, body, resp.status_code,
+                self._record, account, headers, body,
+                resp.status_code if ok else 502,
                 upstream_headers, text, duration_ms, client_key,
                 dialect, model, variant, stream=False, usage=usage)
         except Exception:
@@ -607,6 +645,22 @@ class ChatService:
     # ------------------------------------------------------------------ #
     # streaming
     # ------------------------------------------------------------------ #
+
+    async def _close_and_release(self, resp, account) -> None:
+        """Shielded teardown for non-streaming exchanges.
+
+        Closing must never mask a successful call or skip the slot release:
+        a failed close turns into a log line, not an exception.
+        """
+        try:
+            await resp.aclose()
+        except Exception:
+            log.warning("failed to close upstream response for %s",
+                        account.id, exc_info=True)
+        try:
+            await self.pool.release(account)
+        except Exception:
+            log.exception("failed to release account %s", account.id)
 
     async def open_stream(self, payload: dict, *, model: str, variant: str,
                           dialect: str, client_key: str) -> "StreamHandle":
@@ -720,7 +774,17 @@ class ChatService:
                                 for out in translator.feed(event):
                                     yield out
                     else:
-                        yield chunk                      # byte-exact passthrough
+                        # byte-exact passthrough, but sniff the frames: an
+                        # error frame inside a 200 stream must not be recorded
+                        # as a success (the non-stream path maps the same
+                        # shape to a 502)
+                        pending += chunk
+                        frames, pending = _split_sse_frames(pending)
+                        for frame in frames:
+                            if self._any_error_event(
+                                    frame.decode("utf-8", "replace")):
+                                stream_ok = False
+                        yield chunk
             except httpx.HTTPError as exc:
                 # The stream died after bytes were already sent, so there is no
                 # retrying transparently. Emit a proper error frame in the
@@ -753,30 +817,75 @@ class ChatService:
                                 yield out
                 for out in translator.finish():
                     yield out
+            elif pending.strip() and self._any_error_event(
+                    pending.decode("utf-8", "replace")):
+                # an error frame split across the final chunks: the bytes were
+                # already passed through, but this was not a success
+                stream_ok = False
 
         finally:
-            sse_text = "".join(captured)
+            # shielded: cancellation from a client disconnect must not skip
+            # the slot release, and a failing close must not mask the response
+            await asyncio.shield(self._finish_stream(
+                resp=resp, account=account, headers=headers, body=body,
+                status=status, stream_ok=stream_ok, started=started,
+                captured=captured, tail=tail, client_key=client_key,
+                dialect=dialect, model=model, variant=variant))
+
+    async def _finish_stream(self, *, resp, account, headers, body, status,
+                             stream_ok, started, captured, tail, client_key,
+                             dialect, model, variant) -> None:
+        """Shielded teardown for a streaming exchange; never raises.
+
+        Every step is best-effort: the response bytes are already on the wire,
+        so a failed close or a failed release must not surface as a client
+        error, and an error-carrying stream must not clear the account state.
+        """
+        sse_text = "".join(captured)
+        try:
             await resp.aclose()
+        except Exception:
+            log.warning("failed to close upstream stream for %s",
+                        account.id, exc_info=True)
+        try:
             await self.pool.release(account)
-            duration_ms = (time.time() - started) * 1000
-            if stream_ok:
-                # only a clean completion clears error state / un-cools the
-                # account; an interrupted or error-carrying stream must not
-                # (it used to, hiding real failures from the pool).
-                await self.pool.on_success(account)
-            usage = self._usage_from_sse("".join(tail))
+        except Exception:
+            log.exception("failed to release account %s after a stream",
+                          account.id)
+        duration_ms = (time.time() - started) * 1000
+        if stream_ok:
+            # only a clean completion clears error state / un-cools the
+            # account; an interrupted or error-carrying stream must not
+            # (it used to, hiding real failures from the pool).
             try:
-                await asyncio.to_thread(
-                    self._record, account, headers, body,
-                    status if stream_ok else 502, resp.headers, sse_text,
-                    duration_ms, client_key, dialect, model, variant,
-                    stream=True, usage=usage)
+                await self.pool.on_success(account)
             except Exception:
-                log.exception("failed to record stream exchange")
+                log.exception("failed to mark stream success for %s", account.id)
+        usage = self._usage_from_sse("".join(tail))
+        try:
+            await asyncio.to_thread(
+                self._record, account, headers, body,
+                status if stream_ok else 502, resp.headers, sse_text,
+                duration_ms, client_key, dialect, model, variant,
+                stream=True, usage=usage)
+        except Exception:
+            log.exception("failed to record stream exchange")
 
     # ------------------------------------------------------------------ #
     # helpers
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _any_error_event(text: str) -> bool:
+        """True when an SSE buffer carries an upstream error frame.
+
+        Captured shape: a 200 stream whose frames include
+        {"error": {"code": "...", ...}} instead of choices. The non-stream path
+        maps that shape to a 502; streaming must at least not treat it as a
+        success (which would clear cooldowns and the error ledger).
+        """
+        return any(isinstance(e, dict) and e.get("error")
+                   for e in iter_sse_events(text))
 
     @staticmethod
     def _usage_from_sse(text: str) -> dict:

@@ -113,6 +113,10 @@ Tests:
 .\.venv\Scripts\python -m pytest tests -q
 ```
 
+Dialect-fidelity tests compare the gateway's wire output against captured
+Cline traffic. Point `CLINE_CAPTURE_DIR` at a folder of capture `.jsonl` files
+to run them locally; they skip when no fixtures are present.
+
 ## Configuration
 
 Everything lives in `config.yaml` next to the exe (created on first run, safe
