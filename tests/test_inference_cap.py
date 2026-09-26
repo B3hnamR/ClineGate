@@ -30,9 +30,11 @@ CAP_MESSAGE = ("Error 429: Daily free limit reached on model zai/glm-5.3-flash. 
 
 
 def test_catalog_free_models_are_free():
-    """stealth/space-bunny-alpha is in the live catalogue's free section but has
-    no cline-free/ prefix and no :free suffix — it must still count as free."""
+    """stealth/space-bunny-alpha and stealth/pixel-canary are in the live
+    catalogue's free section but have no cline-free/ prefix and no :free
+    suffix — they must still count as free."""
     assert Registry.is_free("stealth/space-bunny-alpha") is True
+    assert Registry.is_free("stealth/pixel-canary") is True
     assert Registry.is_free("cline-free/gemini-3.8-flash") is True
     assert Registry.is_free("cline-free/mimo-v2.6-flash") is True
 
@@ -213,6 +215,7 @@ from cline_gateway.registry import model_lane     # noqa: E402
 def test_three_lanes():
     assert model_lane("cline-free/deepseek-v4.1-flash") == "free"
     assert model_lane("stealth/space-bunny-alpha") == "free"   # catalogue-free
+    assert model_lane("stealth/pixel-canary") == "free"        # catalogue-free
     assert model_lane("cline-pass/glm-5.3") == "plan"
     assert model_lane("cline-cloud/kimi-k3") == "plan"
     assert model_lane("zai/glm-5.3-flash") == "usage"          # left the free section
@@ -249,7 +252,7 @@ def test_free_model_ignores_balance_entirely():
     a.paid_exhausted = True
     a.has_plan = False
     for m in ("cline-free/deepseek-v4.1-flash", "stealth/space-bunny-alpha",
-              "cline-free/gemini-3.8-flash"):
+              "stealth/pixel-canary", "cline-free/gemini-3.8-flash"):
         assert account_model_status(a, m)["status"] == AVAILABLE, m
     # a former free id that left the free section is correctly NOT available
     assert account_model_status(a, "zai/glm-5.3-flash")["status"] == NO_CREDIT

@@ -42,6 +42,9 @@ CAPTURED_MODEL_VARIANTS: dict[str, Variant] = {
     "openai/gpt-5.6-sol": "openai-nextgen",
     # reasoning shape (5 observed 2026-09-19: reasoning off/medium/high/xhigh)
     "cline-free/kimi-k3": "reasoning",
+    # stealth/pixel-canary captured 2026-09-26: no token-limit key,
+    # reasoning_effort-driven, streams delta.reasoning + reasoning_details
+    "stealth/pixel-canary": "reasoning",
 }
 
 # Catalogued families from model-catalog.json (recommended-models endpoint).
@@ -82,8 +85,9 @@ KNOWN_MODEL_VARIANTS: dict[str, Variant] = {
 }
 
 # The public recommended-models feed is the source for the displayed catalogue.
-# This captured 2026-09-24 snapshot is used until the first successful fetch and
-# during an outage. Historical model ids above remain useful for request variant
+# This captured 2026-09-24 snapshot (free group updated 2026-09-26 with
+# stealth/pixel-canary) is used until the first successful fetch and during an
+# outage. Historical model ids above remain useful for request variant
 # selection, but must not bring removed models back into the Models page.
 FALLBACK_CATALOG_GROUPS: dict[str, tuple[str, ...]] = {
     "recommended": (
@@ -92,6 +96,7 @@ FALLBACK_CATALOG_GROUPS: dict[str, tuple[str, ...]] = {
     ),
     "free": (
         "cline-free/gemini-3.8-flash", "stealth/space-bunny-alpha",
+        "stealth/pixel-canary",
         "cline-free/mimo-v2.6-flash", "cline-free/deepseek-v4.1-flash",
         "cline-free/muse-spark-1.3-contributor",
     ),
