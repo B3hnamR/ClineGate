@@ -14,6 +14,7 @@ Theme: dark + purple. Branding: "Cline Gateway, Coded by @B3hnamR".
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import secrets
@@ -85,6 +86,49 @@ F_MONO = ("Cascadia Mono", 9)
 # spacing grid (px) — 4/8 rhythm, generous at card level
 PAD = 14
 GAP = 8
+
+
+def format_cap_release(info: dict, now: float | None = None, *, exact=False) -> str:
+    """Convert at the viewer, never at the gateway which may run in UTC."""
+    now = time.time() if now is None else now
+    try:
+        dt = datetime.fromisoformat(info.get("release_at"))
+        if dt.tzinfo is None:
+            raise ValueError("ambiguous timestamp")
+    except (TypeError, ValueError):
+        seconds = info.get("release_in_s")
+        if not isinstance(seconds, (int, float)) or not math.isfinite(seconds):
+            return "Reset time unavailable"
+        dt = datetime.fromtimestamp(now + max(0, seconds), timezone.utc)
+    local = dt.astimezone()
+    seconds = max(0, math.ceil(dt.timestamp() - now))
+    minutes = math.ceil(seconds / 60)
+    left = (f"{minutes // 60}h {minutes % 60}m" if minutes >= 60
+            else f"{minutes}m" if seconds >= 60 else f"{seconds}s")
+    if exact and seconds >= 60:
+        left += f" ({seconds}s)"
+    offset = local.strftime("%z")
+    zone = f"UTC{offset[:3]}:{offset[3:]}"
+    return (f"{local:%Y-%m-%d %H:%M:%S} {zone} · "
+            + (f"in {left}" if seconds else "Reset due"))
+
+
+def format_caps(account: dict, now: float | None = None, *, detail=False) -> str:
+    now = time.time() if now is None else now
+    caps = account.get("model_caps") or {}
+    models = sorted(set(caps) | set(account.get("capped_models") or []))
+    lines = []
+    for model in models:
+        info = caps.get(model) or {}
+        name = model if detail else model.rsplit("/", 1)[-1]
+        line = f"{name} → {format_cap_release(info, now, exact=detail)}" if info else name
+        if detail:
+            if info.get("code"):
+                line += f"\n  {info['code']}"
+            if info.get("message"):
+                line += f"\n  {info['message']}"
+        lines.append(line)
+    return ("\n\n" if detail else "; ").join(lines) or "—"
 
 
 def _dark_titlebar(widget: tk.Misc) -> None:
@@ -1060,7 +1104,7 @@ class App(tk.Tk):
         self.acct_body = body
         cols = ("email", "id", "state", "paid_lane", "expires", "balance",
                 "inflight", "capped", "file")
-        widths = (200, 220, 70, 95, 120, 85, 55, 175, 175)
+        widths = (200, 220, 70, 95, 120, 85, 55, 360, 175)
         headings = {
             "email": "EMAIL", "id": "ACCOUNT ID", "state": "STATE",
             "paid_lane": "PAID LANE", "expires": "TOKEN EXPIRES",
@@ -1075,6 +1119,9 @@ class App(tk.Tk):
         sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
         sb.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=sb.set)
+        hsb = ttk.Scrollbar(body, orient="horizontal", command=self.tree.xview)
+        hsb.grid(row=1, column=0, sticky="ew")
+        self.tree.configure(xscrollcommand=hsb.set)
         body.rowconfigure(0, weight=1)
         body.columnconfigure(0, weight=1)
 
@@ -1098,6 +1145,15 @@ class App(tk.Tk):
                           ("Remove", self.act_remove)):
             ttk.Button(detail, text=text, style="Ghost.TButton",
                        command=cmd).pack(side="right", padx=(6, 0))
+        cap_detail = ttk.Frame(f)
+        cap_detail.pack(fill="x", pady=(4, 0))
+        self.cap_detail = tk.Text(cap_detail, height=5, wrap="word", font=F_MONO,
+                                  background=PALETTE["field"], foreground=PALETTE["fg"],
+                                  relief="flat", padx=12, pady=8, state="disabled")
+        self.cap_detail.pack(side="left", fill="both", expand=True)
+        cap_scroll = ttk.Scrollbar(cap_detail, command=self.cap_detail.yview)
+        cap_scroll.pack(side="right", fill="y")
+        self.cap_detail.configure(yscrollcommand=cap_scroll.set)
 
         ttk.Label(
             f, style="Faint.TLabel", justify="left",
@@ -1155,14 +1211,29 @@ class App(tk.Tk):
         sel = self.tree.selection()
         if not sel:
             self.detail_lbl.configure(text="")
+            self._set_cap_detail("")
             return
         v = self.tree.item(sel[0], "values")
+        account = next((a for a in (self._last_state or {}).get("detail", [])
+                        if a.get("id") == v[1]), {})
+        caps = format_caps(account, detail=True)
+        self._set_cap_detail("Cap resets · local time (estimated)\n\n" + caps
+                             if caps != "—" else "No known model caps on this account.")
         self.detail_lbl.configure(
             text=(f"Account: {v[0] or '(no email)'}  \u00b7  id {v[1]}\n"
                   f"state {v[2]}  \u00b7  paid lane {v[3]}  \u00b7  "
                   f"balance {v[5]} USD  \u00b7  token {v[4]}"
-                  f"  \u00b7  in flight {v[6]}  \u00b7  file {v[8]}"),
+                   f"  \u00b7  in flight {v[6]}  \u00b7  file {v[8]}"),
             foreground=PALETTE["fg"])
+
+    def _set_cap_detail(self, text: str) -> None:
+        view = self.cap_detail.yview()
+        self.cap_detail.configure(state="normal")
+        self.cap_detail.delete("1.0", "end")
+        self.cap_detail.insert("1.0", text)
+        self.cap_detail.configure(state="disabled")
+        if view:
+            self.cap_detail.yview_moveto(view[0])
 
     # -- actions ------------------------------------------------------------ #
 
@@ -1412,17 +1483,17 @@ class App(tk.Tk):
                             side="right", padx=10)
 
         cols = ("model", "type", "on", "status", "next_free", "detail")
-        widths = (330, 60, 70, 110, 110, 470)
+        widths = (330, 60, 70, 110, 340, 470)
         headings = {
             "model": "Model", "type": "Lane", "on": "Accounts",
-            "status": "Status", "next_free": "Next free in", "detail": "Why / release",
+            "status": "Status", "next_free": "Next reset · local", "detail": "Why / release",
         }
         body = ttk.Frame(f)
         body.pack(fill="both", expand=True)
         self.mtree = ttk.Treeview(body, columns=cols, show="tree headings",
                                   height=20)
         self.mtree.heading("#0", text="")
-        self.mtree.column("#0", width=1, stretch=False)
+        self.mtree.column("#0", width=28, stretch=False)
         for c, w in zip(cols, widths):
             self.mtree.heading(c, text=headings[c])
             self.mtree.column(c, width=w, anchor="w")
@@ -1430,6 +1501,9 @@ class App(tk.Tk):
         msb = ttk.Scrollbar(body, orient="vertical", command=self.mtree.yview)
         msb.grid(row=0, column=1, sticky="ns")
         self.mtree.configure(yscrollcommand=msb.set)
+        mhsb = ttk.Scrollbar(body, orient="horizontal", command=self.mtree.xview)
+        mhsb.grid(row=1, column=0, sticky="ew")
+        self.mtree.configure(xscrollcommand=mhsb.set)
         body.rowconfigure(0, weight=1)
         body.columnconfigure(0, weight=1)
 
@@ -1999,7 +2073,7 @@ class App(tk.Tk):
             notes = a.get("notes") or {}
             bal = format_balance(a)
 
-            caps = ", ".join(a.get("capped_models") or [])[:60]
+            caps = format_caps(a, now=now_ms / 1000)
             acct_state = a.get("state", "ready")
             # colour by state; a ready account with a spent paid lane gets its own
             # colour rather than being mislabelled "exhausted"
@@ -2038,6 +2112,9 @@ class App(tk.Tk):
         # a re-selected row keeps the detail strip in sync
         if restored:
             self._show_detail()
+        else:
+            self.detail_lbl.configure(text="Select an account for details")
+            self._set_cap_detail("")
 
         # onboarding panel: only when the pool is empty
         if state.get("accounts", 0) == 0:
@@ -2082,6 +2159,8 @@ class App(tk.Tk):
                   f"partial {s.get('partially_available', 0)}  \u00b7  "
                   f"none {s.get('unavailable', 0)}"))
 
+        opened = {self.mtree.item(i, "values")[0] for i in self.mtree.get_children()
+                  if self.mtree.item(i, "open")}
         self.mtree.delete(*self.mtree.get_children())
         only_blocked = self.only_blocked.get()
         needle = (self.model_filter.get() or "").lower()
@@ -2102,8 +2181,9 @@ class App(tk.Tk):
 
             nxt = m.get("next_release_in_s")
             nxt_txt = ""
-            if nxt:
-                nxt_txt = (f"{nxt/3600:.1f}h" if nxt >= 3600 else f"{nxt/60:.0f}m")
+            if nxt is not None:
+                nxt_txt = format_cap_release({"release_in_s": nxt},
+                                             now=avail.get("generated_at"))
 
             detail = ""
             if blocked:
@@ -2112,7 +2192,8 @@ class App(tk.Tk):
                     reasons[a["status"]] = reasons.get(a["status"], 0) + 1
                 detail = ", ".join(f"{v} {k}" for k, v in sorted(reasons.items()))
 
-            node = self.mtree.insert("", "end", text="", tags=(tag,), values=(
+            node = self.mtree.insert("", "end", text="", tags=(tag,),
+                                     open=m["model"] in opened, values=(
                 m["model"],
                 m.get("lane") or ("free" if m["is_free"] else "paid"),
                 f"{m['available_on']}/{m['total_accounts']}",
@@ -2124,9 +2205,8 @@ class App(tk.Tk):
             for a in m["accounts"]:
                 if a["status"] == "available":
                     continue
-                rel = a.get("release_in_s") or 0
-                rel_txt = (f"frees in {rel/3600:.1f}h" if rel >= 3600
-                           else (f"frees in {rel/60:.0f}m" if rel else ""))
+                rel_txt = (format_cap_release(a) if a.get("release_at") or
+                           a.get("release_in_s") is not None else "")
                 why = a.get("reason", "")[:70]
                 if rel_txt:
                     why = f"{why}  ({rel_txt})"

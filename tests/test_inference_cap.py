@@ -157,6 +157,21 @@ async def test_capped_models_appear_in_snapshot():
     assert snap["detail"][0]["capped_models"] == ["zai/glm-5.3-flash"]
 
 
+@pytest.mark.asyncio
+async def test_public_cap_timestamp_roundtrips_to_tracked_release():
+    from datetime import datetime, timezone
+
+    account = Account(id="a1", access_token="t")
+    pool = PoolManager(PoolConfig(), [account])
+    await pool.cap_model(account, "model", 600)
+    cap = account.to_public()["model_caps"]["model"]
+    release = datetime.fromisoformat(cap["release_at"])
+    assert release.tzinfo is not None
+    assert release.utcoffset() == timezone.utc.utcoffset(release)
+    assert release.timestamp() == pytest.approx(account.model_caps["model"], abs=0.000001)
+    assert datetime.fromisoformat(release.isoformat()) == release
+
+
 # --------------------------------------------------------------------------- #
 # the message can name the RAW upstream model, not the requested alias
 # --------------------------------------------------------------------------- #

@@ -169,13 +169,18 @@ async def test_cancel_during_pending(tmp_path):
     assert login.state == "cancelled"
 
 
-def test_routes_registered_and_gated():
+def test_routes_registered_and_gated(tmp_path):
     from fastapi.testclient import TestClient
 
     from cline_gateway.app import create_app
-    from cline_gateway.config import load_config
+    from cline_gateway.config import Config
 
-    cfg = load_config()
+    cfg = Config()
+    cfg.accounts.source = "accounts_dir"
+    cfg.accounts.dir = str(tmp_path / "accounts")
+    cfg.store.sqlite_path = str(tmp_path / "gateway.db")
+    cfg.logging.capture = False
+    cfg.logging.capture_dir = str(tmp_path / "logs")
     cfg.update.enabled = False
     cfg.pool.balance_poll_seconds = 0   # hermetic: no live balance sweeps
     app = create_app(cfg)

@@ -8,8 +8,8 @@
 :root{
   --bg:#0f1115; --panel:#151820; --card:#1a1e27; --elev:#222736;
   --field:#10131a; --stripe:#161a22; --border:#262c3a;
-  --accent:#8b7cf7; --accent-deep:#7466e0; --accent-soft:#b3a7fb; --accent-dim:#2c2b45;
-  --fg:#e8eaf0; --muted:#9aa1b2; --faint:#666e80;
+  --accent:#8b7cf7; --accent-deep:#8072eb; --accent-soft:#b3a7fb; --accent-dim:#2c2b45;
+  --fg:#e8eaf0; --muted:#9aa1b2; --faint:#929bad;
   --ok:#3ddc84; --warn:#ffc857; --err:#ff6b7a;
   --r:10px;
 }
@@ -107,7 +107,7 @@ tbody tr.sel{background:var(--accent-dim) !important}
 .b-usage,.b-free,.b-plan{background:rgba(154,161,178,.12); color:var(--muted)}
 
 /* ---------- forms ---------- */
-input[type=text],input[type=number],select{
+input[type=text],input[type=search],input[type=number],select{
   background:var(--field); color:var(--fg); border:1px solid var(--border);
   border-radius:8px; padding:8px 11px; font:13px "Segoe UI",sans-serif; outline:none; width:100%}
 input:focus,select:focus{border-color:var(--accent)}
@@ -164,7 +164,7 @@ th .arr{font-size:9px; margin-left:3px; color:var(--accent-soft)}
   align-items:center; margin-bottom:7px}
 .dense .field label{margin-bottom:0; font-size:12px}
 .dense .field .help{grid-column:2; margin-top:1px}
-.dense input[type=text],.dense input[type=number],.dense select{padding:6px 9px; font-size:12.5px}
+.dense input[type=text],.dense input[type=search],.dense input[type=number],.dense select{padding:6px 9px; font-size:12.5px}
 
 /* ---------- guide ---------- */
 .guide h2{margin-top:0}
@@ -196,6 +196,15 @@ th .arr{font-size:9px; margin-left:3px; color:var(--accent-soft)}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--elev); border-radius:6px; border:2px solid var(--bg)}
 ::-webkit-scrollbar-thumb:hover{background:var(--border)}
+.cap-cell{min-width:250px; font-size:12px}
+.cap-entry + .cap-entry{margin-top:12px; padding-top:10px; border-top:1px solid var(--border)}
+.cap-entry b{display:block; color:var(--fg); overflow-wrap:anywhere}
+.reset-time{color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; line-height:1.6}
+.reset-time time{white-space:nowrap}
+.reset-left{display:block; color:var(--fg)}
+.reset-note{color:var(--muted); font-size:12px; margin:0 0 12px}
+.cap-message{color:var(--muted); overflow-wrap:anywhere; max-width:65ch; margin:4px 0 10px}
+#accounts-no-match td{text-align:center; padding:24px; color:var(--muted)}
 </style>
 </head>
 <body>
@@ -348,6 +357,33 @@ const App = (() => {
   const fmtLeft = ms => { const d = ms - Date.now(); if (d <= 0) return "expired";
     const m = Math.floor(d/60000), h = Math.floor(m/60);
     return h ? `${h}h ${m%60}m` : `${m} min`; };
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  function capRelease(info, now = Date.now()) {
+    // A naive timestamp is ambiguous; use a relative fallback rather than guess.
+    let ms = typeof info.release_at === "string" && /(?:Z|[+-]\d{2}:\d{2})$/i.test(info.release_at)
+      ? Date.parse(info.release_at) : NaN;
+    if (!Number.isFinite(ms) && typeof info.release_in_s === "number" && Number.isFinite(info.release_in_s))
+      ms = now + Math.max(0, info.release_in_s) * 1000;
+    if (!Number.isFinite(ms)) return "Reset time unavailable";
+    const d = new Date(ms), seconds = Math.max(0, Math.ceil((ms - now) / 1000));
+    const minutes = Math.ceil(seconds / 60);
+    const left = seconds < 60 ? `${seconds}s` : minutes < 60 ? `${minutes}m`
+      : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+    const local = d.toLocaleString(undefined, {year:"numeric", month:"short", day:"numeric",
+      hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23"});
+    return `<time datetime="${esc(d.toISOString())}">${esc(local)}</time>`
+      + `<span class="reset-left">${seconds ? "in " + left : "Reset due"}</span>`;
+  }
+  function capCell(account) {
+    const caps = account.model_caps || {};
+    const models = [...new Set([...Object.keys(caps), ...(account.capped_models || [])])].sort();
+    return models.map(model => {
+      const info = caps[model];
+      return `<div class="cap-entry" title="${esc(info?.message || model)}">
+        <b>${esc(model.split("/").pop())}</b>
+        ${info ? `<div class="reset-time">${capRelease(info)}</div>` : ""}</div>`;
+    }).join("") || "—";
+  }
   function badge(state){ return `<span class="badge b-${esc(state)}">${esc(state)}</span>`; }
   function copy(text){ navigator.clipboard.writeText(text).then(
     () => toast("copied", "ok"), () => toast("copy failed", "err")); }
@@ -472,9 +508,26 @@ const App = (() => {
   }
 
   /* ------------ tab: accounts ------------ */
-  async function renderAccounts(v){
+  function filterAccounts(input) {
+    cache.acctQ = input.value;
+    const q = input.value.toLowerCase();
+    let count = 0;
+    document.querySelectorAll("#accounts-body tr[data-search]").forEach(row => {
+      const matches = row.dataset.search.includes(q);
+      row.hidden = !matches;
+      if (matches) count++;
+    });
+    const empty = $("#accounts-no-match");
+    if (empty) empty.hidden = count !== 0;
+  }
+  async function renderAccounts(v = $("#view")){
     const [accs, pool] = await Promise.all([
       api("/admin/accounts"), api("/admin/pool/state")]);
+    if (curTab !== "accounts") return;
+    const previous = $("#acct-q");
+    const focused = previous && document.activeElement === previous;
+    const selection = focused ? [previous.selectionStart, previous.selectionEnd] : null;
+    const query = previous?.value ?? cache.acctQ ?? "";
     const rows = accs.accounts;
     let html = `<div class="toolbar">
       <button class="btn btn-pri" onclick="App.loginStart()">🔑 Login with Cline</button>
@@ -482,8 +535,8 @@ const App = (() => {
       <button class="btn btn-ghost" onclick="App.doReload()">Reload pool</button>
       <button class="btn btn-quiet" onclick="App.refresh()">Refresh</button>
       <div class="grow"></div>
-      <input type="text" id="acct-q" placeholder="Filter…" style="max-width:230px"
-             oninput="App.renderAccounts()">
+       <input type="search" id="acct-q" placeholder="Filter accounts…" aria-label="Filter accounts" style="max-width:230px"
+              oninput="App.filterAccounts(this)">
     </div>`;
     if (!rows.length) {
       html += `<div class="card"><div class="empty">
@@ -499,22 +552,21 @@ const App = (() => {
         <button class="btn btn-ghost" onclick="App.tab('guide')">Setup guide</button>
       </div></div>`;
     } else {
-      const q = (document.getElementById("acct-q")?.value || "").toLowerCase();
-      const shown = rows.filter(a =>
-        !q || (a.email + a.id + a.state + (a.source||"")).toLowerCase().includes(q));
+      const shown = rows;
+      html += `<p class="reset-note">Cap resets in ${esc(localZone)} · Estimated from upstream wait times.</p>`;
       html += `<div class="tbl-wrap"><table><thead><tr>
         <th>Email</th><th>State</th><th>Paid lane</th><th>Token expires</th>
-        <th>Balance</th><th>Runs</th><th>Capped models</th><th></th></tr></thead><tbody>`;
+        <th>Balance</th><th>Runs</th><th>Capped models / local reset</th><th></th></tr></thead><tbody id="accounts-body">`;
       for (const a of shown) {
-        const caps = (a.capped_models||[]).map(m => m.split("/").pop()).join(", ") || "—";
-        html += `<tr>
+        const caps = capCell(a);
+        html += `<tr data-search="${esc([a.email, a.id, a.state, a.source, ...(a.capped_models || [])].join(" ").toLowerCase())}">
           <td><b>${esc(a.email || a.id)}</b><br><span class="mono" style="color:var(--faint)">${esc(a.id)}</span></td>
           <td>${badge(a.state)}</td>
           <td>${a.paid_exhausted ? badge("paid_exhausted") : badge("available")}</td>
           <td>${fmtLeft(a.expires_at || 0)}</td>
           <td class="mono">${fmtUsd(a.balance_micro)}</td>
           <td>${a.in_flight}</td>
-          <td style="color:var(--muted); font-size:12px">${esc(caps)}</td>
+          <td class="cap-cell">${caps}</td>
           <td style="white-space:nowrap; text-align:right">
             <button class="btn btn-quiet btn-sm" title="refresh token"
               onclick="App.acct('refresh','${esc(a.id)}')">↻</button>
@@ -526,14 +578,18 @@ const App = (() => {
               onclick="App.acctRemove('${esc(a.id)}')">✕</button>
           </td></tr>`;
       }
-      html += `</tbody></table></div>
+      html += `<tr id="accounts-no-match" hidden><td colspan="8">No accounts match this filter.</td></tr></tbody></table></div>
         <p style="color:var(--faint); font-size:12px; margin-top:10px">
           Paid lane = ability to spend Cline Credits. Exhausted accounts keep serving
           all cline-free models. ~ = import-time balance, not yet re-polled.</p>`;
     }
     v.innerHTML = html;
     const q = document.getElementById("acct-q");
-    if (q && cache.acctQ) { q.value = cache.acctQ; }
+    if (q) {
+      q.value = query;
+      filterAccounts(q);
+      if (focused) { q.focus(); q.setSelectionRange(...selection); }
+    }
   }
 
   async function doImport(){
@@ -664,6 +720,8 @@ const App = (() => {
   async function renderModels(v){
     const data = await api("/admin/models/availability");
     if (curTab !== "models") return;
+    const opened = new Set([...document.querySelectorAll("#models-body details[open]")]
+      .map(el => el.dataset.model));
     const previousInput = document.getElementById("mdl-q");
     const focused = document.activeElement === previousInput;
     const selection = focused ? [previousInput.selectionStart, previousInput.selectionEnd] : null;
@@ -702,22 +760,24 @@ const App = (() => {
       <button class="btn btn-quiet btn-sm" onclick="App.syncModels()">Sync models</button>
       <input type="text" id="mdl-q" placeholder="Filter models…" style="max-width:230px"
              oninput="App.filterModels(this)"></div>`;
+    html += `<p class="reset-note">Reset times in ${esc(localZone)} · Estimated from upstream wait times.</p>`;
     html += `<div class="tbl-wrap"><table class="tbl-compact"><thead><tr>
       ${th("Model","model")}${th("Lane","lane")}${th("On accounts","ratio")}
-      ${th("Status","rank")}${th("Next free","next")}</tr></thead><tbody id="models-body">`;
+      ${th("Status","rank")}${th("Next reset · local","next")}</tr></thead><tbody id="models-body">`;
     for (const m of models) {
       html += `<tr>
-        <td><details><summary><span class="caret">▶</span>
+        <td><details data-model="${esc(m.model)}" ${opened.has(m.model) ? "open" : ""}><summary><span class="caret">▶</span>
             <b class="mono" style="font-size:12px">${esc(m.model)}</b></summary>
           <div class="model-acc">${
             m.accounts.map(a => `<div>${esc(a.email || a.account_id)} —
-              ${badge(a.status)} <span style="color:var(--faint)">${esc(a.reason || "")}
-              ${a.release_in_s ? " · frees in " + fmtSecs(a.release_in_s) : ""}</span></div>`
+              ${badge(a.status)} <span style="color:var(--muted)">${esc(a.reason || "")}</span>
+              ${a.release_at || a.release_in_s != null ? `<div class="reset-time">${capRelease(a)}</div>` : ""}
+              ${a.message ? `<div class="cap-message">${esc(a.message)}</div>` : ""}</div>`
             ).join("") || "<div>no accounts</div>"}</div></details></td>
         <td>${badge(m.lane)}</td>
         <td>${m.available_on}/${m.total_accounts}</td>
         <td>${badge(m.overall)}</td>
-        <td class="mono">${m.next_release_in_s != null ? fmtSecs(m.next_release_in_s) : "—"}</td>
+        <td class="reset-time">${m.next_release_in_s != null ? capRelease({release_in_s:m.next_release_in_s}) : "—"}</td>
       </tr>`;
     }
     html += `</tbody></table></div>
@@ -1023,7 +1083,7 @@ api_key: ${esc(s.admin_key)}   # or any client key</p>
   }
 
   return {start, login, tab, refresh, renderAccounts, renderModels, renderLogs,
-          sortModels, filterModels, syncModels, doImport, doReload, acct, acctRemove, saveSettings,
+          sortModels, filterModels, filterAccounts, syncModels, doImport, doReload, acct, acctRemove, saveSettings,
           regenKeys, clearLogs, toggleServer, copy,
           showUpdate, hideUpdate, skipUpdate, doUpdate,
           loginStart, loginCancel};
