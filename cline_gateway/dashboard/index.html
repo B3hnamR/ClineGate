@@ -836,11 +836,13 @@ api_key: ${esc(s.admin_key)}   # or any client key</p>
     const inp = (path, kind) => {
       const val = values[path];
       if (kind === "bool") {
-        return `<select data-set="${path}"><option value="true" ${val ? "selected":""}>true</option>
+        const raw = val ? "true" : "false";
+        return `<select data-set="${path}" data-orig="${raw}"><option value="true" ${val ? "selected":""}>true</option>
           <option value="false" ${!val ? "selected":""}>false</option></select>`;
       }
       const t = (kind === "int" || kind === "float") ? "number" : "text";
-      return `<input type="${t}" data-set="${path}" value="${esc(val ?? "")}"
+      const raw = esc(val ?? "");
+      return `<input type="${t}" data-set="${path}" data-orig="${raw}" value="${raw}"
         ${kind==="float" ? 'step="any"' : ""}>`;
     };
     const grp = (title, rows) => `<fieldset><legend>${title}</legend>
@@ -865,6 +867,7 @@ api_key: ${esc(s.admin_key)}   # or any client key</p>
       ["pool.acquire_wait_seconds","float","Acquire wait (s)","how long to wait for a free slot"],
       ["pool.balance_poll_seconds","int","Balance poll (s)","0 disables"]])}
     ${grp("Upstream", [
+      ["upstream.proxy","text","Proxy","socks5h://127.0.0.1:1080 · http://127.0.0.1:10809 · empty = direct"],
       ["upstream.timeout_connect","float","Connect timeout (s)",""],
       ["upstream.timeout_read","float","Read timeout (s)","long streams"],
       ["upstream.max_attempts","int","Max attempts","per request, across accounts"],
@@ -890,9 +893,19 @@ api_key: ${esc(s.admin_key)}   # or any client key</p>
 
   async function saveSettings(){
     const values = {};
-    document.querySelectorAll("[data-set]").forEach(el => { values[el.dataset.set] = el.value; });
+    // send only fields the user actually changed: untouched inputs (possibly
+    // empty because config.yaml never had them) would fail the server's
+    // int/float cast and abort the whole save
+    document.querySelectorAll("[data-set]").forEach(el => {
+      if (el.value !== el.dataset.orig) values[el.dataset.set] = el.value;
+    });
     try {
       const r = await api("/admin/dash/settings", {method:"PUT", body:{values}});
+      // stamp only the fields that were submitted, with their submitted value:
+      // an edit made while the request was in flight must stay dirty
+      document.querySelectorAll("[data-set]").forEach(el => {
+        if (el.dataset.set in values) el.dataset.orig = values[el.dataset.set];
+      });
       toast(r.changed.length ? `saved ${r.changed.length} setting(s) — restart applies`
                              : "no changes", "ok");
     } catch (e) { toast("save: " + e.message, "err"); }

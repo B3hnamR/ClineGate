@@ -18,6 +18,11 @@ server:
 upstream:
   base_url: https://api.cline.bot/api/v1
   chat_path: /chat/completions
+  # Optional proxy for ALL upstream calls (chat, token refresh, login, model
+  # feed) — e.g. a local VPN client's inbound. "" = direct.
+  #   socks5h://127.0.0.1:1080   SOCKS5, DNS resolved through the proxy
+  #   http://127.0.0.1:10809     HTTP proxy (CONNECT tunnel)
+  proxy: ""
   timeout_connect: 15
   timeout_read: 600          # streaming responses can be long
   max_attempts: 3            # per request, across accounts

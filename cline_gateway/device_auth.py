@@ -64,13 +64,15 @@ class DeviceLogin:
 
     def __init__(self, accounts_dir: Path,
                  client: httpx.AsyncClient | None = None,
+                 proxy: str = "",
                  on_account=None) -> None:
         self.accounts_dir = accounts_dir
         self.on_account = on_account      # async fn(Account), awaited on success
         self._own_client = client is None
         self.client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=10.0),
-            headers={"User-Agent": UA, "Accept": "*/*"})
+            headers={"User-Agent": UA, "Accept": "*/*"},
+            proxy=proxy or None)
         self.state = "idle"
         self.error: str | None = None
         self.user_code: str | None = None

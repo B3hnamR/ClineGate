@@ -14,6 +14,7 @@ import os
 import threading
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -36,7 +37,7 @@ def _dash_dir() -> Path:
 DASH_DIR = _dash_dir()
 
 # Settings the dashboard may edit (dotted config paths). Anything not listed
-# is read-only from the UI — keeps credentials and upstream URLs out of it.
+# is read-only from the UI — keeps admin/client keys and upstream URLs out.
 _EDITABLE = {
     "server.host": str, "server.port": int,
     "pool.strategy": str, "pool.min_balance_micro": int,
@@ -45,12 +46,36 @@ _EDITABLE = {
     "pool.balance_poll_seconds": int,
     "upstream.timeout_connect": float, "upstream.timeout_read": float,
     "upstream.max_attempts": int, "upstream.anthropic_cache_control": bool,
+    "upstream.proxy": str,
     "accounts.source": str, "accounts.dir": str, "accounts.pool_file": str,
     "logging.level": str, "logging.capture": bool,
     "models.default": str, "models.default_anthropic": str,
     "models.probe_unknown": bool,
     "update.enabled": bool, "update.interval_hours": float,
 }
+
+# proxy URL schemes httpx accepts for AsyncClient(proxy=...) — checked
+# against httpx 0.28 (socks4/socks4a and ftp are rejected there too)
+_PROXY_SCHEMES = {"http", "https", "socks5", "socks5h"}
+
+
+def _proxy_error(value: str) -> str | None:
+    """Why `value` cannot be used as upstream.proxy, or None when it can.
+
+    Rejected here, before the write: httpx raises at client construction, so
+    a bad value saved to config.yaml would stop the gateway booting at all.
+    """
+    if not value:
+        return None                      # empty = direct
+    parts = urlsplit(value)
+    if not parts.scheme:
+        return "missing scheme, e.g. socks5h://127.0.0.1:1080"
+    if parts.scheme.lower() not in _PROXY_SCHEMES:
+        return (f"unsupported scheme {parts.scheme!r}; "
+                "use http, https, socks5 or socks5h")
+    if not parts.hostname:
+        return "missing host"
+    return None
 
 
 def _read_config_raw(path: Path) -> dict:
@@ -176,6 +201,11 @@ async def dash_settings_put(request: Request, body: dict = Body(...),
         except (TypeError, ValueError):
             raise HTTPException(status_code=400,
                                 detail=f"{dotted}: cannot cast {val!r}") from None
+        if dotted == "upstream.proxy":
+            problem = _proxy_error(val)
+            if problem:
+                raise HTTPException(status_code=400,
+                                    detail=f"upstream.proxy: {problem}")
         cur = raw
         parts = dotted.split(".")
         for part in parts[:-1]:
@@ -244,6 +274,7 @@ async def login_start(request: Request, key: str = Depends(admin_key)) -> dict:
             log.warning("post-login account check failed for %s", account.id)
 
     login = DeviceLogin(Path(state.cfg.accounts.dir),
+                        proxy=state.cfg.upstream.proxy,
                         on_account=_add_and_probe)
     state.device_login = login
     task = asyncio.create_task(login.run(), name="device-login")

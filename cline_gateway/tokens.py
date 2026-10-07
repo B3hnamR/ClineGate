@@ -96,6 +96,7 @@ class TokenManager:
         self.pool = pool
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=10.0), headers={},
+            proxy=cfg.upstream.proxy or None,   # refresh must follow the proxy too
         )
         self._locks: dict[str, asyncio.Lock] = {}
         # bound concurrent refreshes: N accounts expiring together must not fire

@@ -68,6 +68,8 @@ curl http://127.0.0.1:8787/v1/chat/completions `
   state settle the moment an account is added or checked.
 - **Automatic token refresh** — access tokens expire hourly; ClineGate renews
   them in the background and retries transparently on a 401.
+- **Optional egress proxy** — route every upstream call (chat, token refresh,
+  login, model feed) through a local SOCKS5 or HTTP proxy — no TUN mode needed.
 - **Lane-aware failover** — free models, credit-billed models, and
   subscription models fail differently, and the pool treats them differently:
   a daily cap parks one model, a drained balance retires only the paid lane.
@@ -123,8 +125,9 @@ to run them locally; they skip when no fixtures are present.
 
 Everything lives in `config.yaml` next to the exe (created on first run, safe
 to edit — restart applies). The in-app **Settings** tab covers the common
-knobs: pool strategy, cooldowns, timeouts, accounts folder, logging, and
-update checks. All settings can also be overridden with environment variables:
+knobs: pool strategy, cooldowns, timeouts, the upstream proxy, accounts
+folder, logging, and update checks. All settings can also be overridden with
+environment variables:
 `CLINE_GATEWAY_<SECTION>__<FIELD>` (e.g. `CLINE_GATEWAY_SERVER__PORT=9999`).
 
 ## Security & privacy notes

@@ -22,6 +22,7 @@ class ModelCatalog:
 
     def __init__(self, base_url: str, registry: Registry, *,
                  client: httpx.AsyncClient | None = None,
+                 proxy: str = "",
                  refresh_seconds: float = REFRESH_SECONDS,
                  retry_seconds: float = RETRY_SECONDS) -> None:
         self.url = base_url.rstrip("/") + CATALOG_PATH
@@ -31,6 +32,7 @@ class ModelCatalog:
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(5.0, connect=3.0),
             headers={"accept": "application/json", "user-agent": "ClineGate-models"},
+            proxy=proxy or None,
         )
         self._owns_client = client is None
         self._lock = asyncio.Lock()

@@ -433,6 +433,7 @@ class UpstreamClient:
             headers={},          # never inject a default User-Agent
             follow_redirects=False,
             http2=False,
+            proxy=cfg.proxy or None,
         )
 
     async def aclose(self) -> None:

@@ -49,6 +49,11 @@ class UpstreamConfig(BaseModel):
     timeout_connect: float = 15.0
     timeout_read: float = 600.0
     max_attempts: int = 3
+    # Optional egress proxy for every upstream call (chat, token refresh,
+    # login, model feed), e.g. "socks5h://127.0.0.1:1080" (SOCKS5, remote DNS)
+    # or "http://127.0.0.1:10809" (HTTP CONNECT). "" = direct. socks5 needs
+    # httpx[socks]. Also settable via CLINE_GATEWAY_UPSTREAM__PROXY.
+    proxy: str = ""
     # Whether the anthropic body variant carries `cache_control`. The capture
     # always included it; flip to false to test whether it is optional.
     anthropic_cache_control: bool = True

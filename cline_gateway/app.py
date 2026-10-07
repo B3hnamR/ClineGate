@@ -52,7 +52,8 @@ async def lifespan(app: FastAPI):
         default_anthropic=cfg.models.default_anthropic,
         probe_unknown=cfg.models.probe_unknown,
     )
-    catalog = ModelCatalog(cfg.upstream.base_url, registry)
+    catalog = ModelCatalog(cfg.upstream.base_url, registry,
+                           proxy=cfg.upstream.proxy)
 
     try:
         accounts = load_accounts(cfg.accounts)
